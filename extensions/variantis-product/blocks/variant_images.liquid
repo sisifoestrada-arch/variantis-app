@@ -1,0 +1,21 @@
+{% comment %}
+  Variantis – Module A: Variant Images
+  App Embed Block — inject on product pages only.
+  Reads the variantis.image_assignment metafield and passes it to the JS.
+{% endcomment %}
+
+{% if product.metafields.variantis.image_assignment.value != blank %}
+  <script id="variantis-product-data" type="application/json">
+    {{ product.metafields.variantis.image_assignment.value }}
+  </script>
+  <script src="{{ 'variantis-product.js' | asset_url }}" defer></script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Variantis – Variant Images",
+  "target": "head",
+  "templates": ["product"],
+  "settings": []
+}
+{% endschema %}

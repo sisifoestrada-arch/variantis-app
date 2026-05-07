@@ -1,0 +1,67 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// Module B: Collection Display Configuration
+model CollectionConfig {
+  id              String   @id @default(cuid())
+  shop            String
+  collectionId    String
+  collectionTitle String   @default("")
+  enabled         Boolean  @default(true)
+  splitByOption   String   @default("Color")
+  hideOutOfStock  Boolean  @default(false)
+  showOnlyDiscount Boolean @default(false)
+  hideWithoutImage Boolean @default(false)
+  titleFormat     String   @default("product_variant") // product_only | variant_only | product_variant | custom
+  customTitleFormat String @default("{product} - {variant}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  variants        VariantCollectionConfig[]
+
+  @@unique([shop, collectionId])
+}
+
+// Per-variant display config within a collection
+model VariantCollectionConfig {
+  id            String   @id @default(cuid())
+  shop          String
+  collectionId  String
+  variantId     String
+  productId     String
+  variantTitle  String
+  imageUrl      String   @default("")
+  hoverImageUrl String   @default("")
+  visible       Boolean  @default(true)
+  position      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  collection    CollectionConfig @relation(fields: [shop, collectionId], references: [shop, collectionId])
+
+  @@unique([shop, collectionId, variantId])
+}
