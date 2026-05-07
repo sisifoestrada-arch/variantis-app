@@ -1,4 +1,27 @@
 -- CreateTable
+CREATE TABLE "Session" (
+    "id" TEXT NOT NULL,
+    "shop" TEXT NOT NULL,
+    "state" TEXT NOT NULL,
+    "isOnline" BOOLEAN NOT NULL DEFAULT false,
+    "scope" TEXT,
+    "expires" TIMESTAMP(3),
+    "accessToken" TEXT NOT NULL,
+    "userId" BIGINT,
+    "firstName" TEXT,
+    "lastName" TEXT,
+    "email" TEXT,
+    "accountOwner" BOOLEAN NOT NULL DEFAULT false,
+    "locale" TEXT,
+    "collaborator" BOOLEAN DEFAULT false,
+    "emailVerified" BOOLEAN DEFAULT false,
+    "refreshToken" TEXT,
+    "refreshTokenExpires" TIMESTAMP(3),
+
+    CONSTRAINT "Session_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "CollectionConfig" (
     "id" TEXT NOT NULL,
     "shop" TEXT NOT NULL,
@@ -35,11 +58,11 @@ CREATE TABLE "VariantCollectionConfig" (
     CONSTRAINT "VariantCollectionConfig_pkey" PRIMARY KEY ("id")
 );
 
--- AddForeignKey
-ALTER TABLE "VariantCollectionConfig" ADD CONSTRAINT "VariantCollectionConfig_shop_collectionId_fkey" FOREIGN KEY ("shop", "collectionId") REFERENCES "CollectionConfig"("shop", "collectionId") ON DELETE RESTRICT ON UPDATE CASCADE;
-
 -- CreateIndex
 CREATE UNIQUE INDEX "CollectionConfig_shop_collectionId_key" ON "CollectionConfig"("shop", "collectionId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "VariantCollectionConfig_shop_collectionId_variantId_key" ON "VariantCollectionConfig"("shop", "collectionId", "variantId");
+
+-- AddForeignKey
+ALTER TABLE "VariantCollectionConfig" ADD CONSTRAINT "VariantCollectionConfig_shop_collectionId_fkey" FOREIGN KEY ("shop", "collectionId") REFERENCES "CollectionConfig"("shop", "collectionId") ON DELETE RESTRICT ON UPDATE CASCADE;
