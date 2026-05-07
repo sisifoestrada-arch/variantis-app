@@ -1,12 +1,8 @@
 {% comment %}
   Variantis – Module B: Collection Display
   App Embed Block — injects on collection, index, and search templates.
-  Fetches collection display config from the app proxy endpoint.
 {% endcomment %}
 
-{% assign variantis_proxy_url = shop.metafields.variantis.proxy_url.value %}
-
-{% comment %} Inject config for current page context {% endcomment %}
 <script id="variantis-collection-data" type="application/json">
   {% if template.name == "collection" and collection %}
     [{{ collection.metafields.variantis.display_config.value | default: "null" }}]

@@ -1,10 +1,9 @@
 api_version = "2026-07"
-uid = "fb825e5f-f196-f8ca-a6b2-bee95156490b4bbc8e08"
 
 [[extensions]]
 type = "theme"
-name = "Variantis – Variant Images"
-handle = "variantis-product"
+name = "Variantis"
+handle = "variantis-theme"
 
   [extensions.development]
     resource = {url = "/products/example"}
