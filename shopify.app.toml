@@ -2,7 +2,7 @@
 
 client_id = "32922c7002a68a1ea720ba1e253af430"
 name = "variantis-app"
-application_url = "https://example.com"
+application_url = "https://variantis-app-production.up.railway.app"
 embedded = true
 
 [access_scopes]
@@ -20,7 +20,7 @@ api_version = "2026-07"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://variantis-app-production.up.railway.app/auth/callback" ]
 
 [build]
 include_config_on_deploy = true
