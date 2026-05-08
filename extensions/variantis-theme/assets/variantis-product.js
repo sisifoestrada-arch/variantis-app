@@ -139,12 +139,25 @@
     }
 
     getMediaItems() {
-      // Horizon-specific: each slideshow-slide wraps a media item
-      const horizon = document.querySelectorAll("slideshow-slide");
-      if (horizon.length > 0) return Array.from(horizon);
+      const items = new Set();
 
-      // Other patterns - prefer parent containers over leaf elements
-      const selectors = [
+      // Horizon: main slideshow + zoom dialog + thumbnails
+      document.querySelectorAll("slideshow-slide").forEach((el) => items.add(el));
+
+      // Thumbnails and other variants of media items: any element with data-media-id
+      // Walk up to nearest "slide-like" parent so we hide the wrapping container
+      document.querySelectorAll("[data-media-id]").forEach((el) => {
+        // Element itself may be the wrapper or a button. Find the most relevant
+        // ancestor we should toggle visibility on.
+        const wrapper =
+          el.closest(
+            "slideshow-slide, .product-media-container, .product__media-item, .product__media-wrapper, [data-thumbnail], .swiper-slide, .product-gallery__item, li, button"
+          ) || el;
+        items.add(wrapper);
+      });
+
+      // Other theme-specific patterns
+      const fallbackSelectors = [
         ".product__media-list .product__media-item",
         ".product-single__media-group .product-single__media",
         ".product__media-wrapper",
@@ -152,12 +165,11 @@
         ".swiper-slide",
         ".product-gallery__item",
       ];
-      for (const sel of selectors) {
-        const items = document.querySelectorAll(sel);
-        if (items.length > 0) return Array.from(items);
+      for (const sel of fallbackSelectors) {
+        document.querySelectorAll(sel).forEach((el) => items.add(el));
       }
-      // Last resort: every element with a media id (may include thumbs/zoom)
-      return Array.from(document.querySelectorAll("[data-media-id]"));
+
+      return Array.from(items);
     }
 
     extractNumericMediaId(el) {
