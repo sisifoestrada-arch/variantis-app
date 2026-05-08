@@ -125,13 +125,33 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       const variant = ve.node;
       const firstOption = variant.selectedOptions[0];
 
-      // Resolve URLs from mediaIds for this variant (Module A assignment)
+      // Module A: variant-specific assigned images, in user-defined order
       const assignedMediaIds = imageAssignment[variant.id] ?? [];
-      const variantUrls = [...assignedMediaIds, ...commonImageIds]
+      const assignedUrls = assignedMediaIds
         .map((id) => mediaUrlMap.get(id))
         .filter((u): u is string => Boolean(u));
 
-      const primaryUrl = variantUrls[0] ?? variant.image?.url ?? "";
+      const commonUrls = commonImageIds
+        .map((id) => mediaUrlMap.get(id))
+        .filter((u): u is string => Boolean(u));
+
+      // FORCE the Shopify variant image (miniatura) as position 0
+      const variantThumbnail = variant.image?.url ?? "";
+
+      // Build final list: [variantThumbnail, ...assigned (excluding thumbnail), ...common (excluding thumbnail)]
+      const seen = new Set<string>();
+      const finalUrls: string[] = [];
+      const pushUnique = (u: string) => {
+        if (!u || seen.has(u)) return;
+        seen.add(u);
+        finalUrls.push(u);
+      };
+
+      pushUnique(variantThumbnail);
+      assignedUrls.forEach(pushUnique);
+      commonUrls.forEach(pushUnique);
+
+      const primaryUrl = finalUrls[0] ?? "";
 
       allVariants.push({
         variantId: variant.id,
@@ -140,7 +160,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         variantTitle: variant.title,
         productTitle: product.title,
         imageUrl: primaryUrl,
-        imageUrls: variantUrls.length > 0 ? variantUrls : (primaryUrl ? [primaryUrl] : []),
+        imageUrls: finalUrls,
         price: variant.price,
         availableForSale: variant.availableForSale,
         optionValue: firstOption?.value ?? variant.title,
