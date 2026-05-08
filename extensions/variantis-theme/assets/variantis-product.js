@@ -8,16 +8,35 @@
 
   const TRANSITION_MS = 300;
 
+  function toMediaGid(value) {
+    if (!value) return null;
+    if (value.startsWith("gid://")) return value;
+    return `gid://shopify/MediaImage/${value}`;
+  }
+
+  function toVariantGid(value) {
+    if (!value) return null;
+    if (String(value).startsWith("gid://")) return value;
+    return `gid://shopify/ProductVariant/${value}`;
+  }
+
+  // Convert any media ID to a comparable numeric form
+  function toNumericMediaId(value) {
+    if (!value) return null;
+    const match = String(value).match(/(\d+)$/);
+    return match ? match[1] : null;
+  }
+
   class VariantisProductImages {
     constructor() {
-      this.assignment = null;   // { variantId: [mediaId, ...] }
-      this.commonImages = [];   // mediaIds shared across all variants
+      this.assignment = {};       // { variantId: [mediaId, ...] }
+      this.commonImages = [];
+      this.allowedNumericIds = null; // current allowed set (numeric IDs)
       this.currentVariantId = null;
       this.init();
     }
 
     init() {
-      // Load metafield data injected by the liquid block
       const dataEl = document.getElementById("variantis-product-data");
       if (!dataEl) return;
 
@@ -29,60 +48,53 @@
         return;
       }
 
-      // Find current variant from URL or form
       this.detectCurrentVariant();
-
-      // Listen for variant changes — covers all theme patterns
       this.watchVariantChanges();
 
-      // Initial filter
       if (this.currentVariantId) {
         this.filterImages(this.currentVariantId);
       }
     }
 
     detectCurrentVariant() {
-      // 1. URL param
       const params = new URLSearchParams(window.location.search);
       const variantParam = params.get("variant");
       if (variantParam) {
-        this.currentVariantId = `gid://shopify/ProductVariant/${variantParam}`;
+        this.currentVariantId = toVariantGid(variantParam);
         return;
       }
-
-      // 2. Hidden input in variant form
       const variantInput = document.querySelector(
         'input[name="id"], select[name="id"]'
       );
       if (variantInput) {
-        this.currentVariantId = `gid://shopify/ProductVariant/${variantInput.value}`;
+        this.currentVariantId = toVariantGid(variantInput.value);
       }
     }
 
     watchVariantChanges() {
-      // Method 1: Shopify native variant:change event (Dawn, Refresh, etc.)
+      // Shopify native variant:change event
       document.addEventListener("variant:change", (e) => {
         const variantId = e.detail?.variant?.id;
         if (variantId) {
-          this.currentVariantId = `gid://shopify/ProductVariant/${variantId}`;
+          this.currentVariantId = toVariantGid(variantId);
           this.filterImages(this.currentVariantId);
         }
       });
 
-      // Method 2: form input change (select, radio)
+      // Form input change (selects, radios, hidden inputs named "id")
       document.addEventListener("change", (e) => {
         const el = e.target;
         if (el && el.name === "id") {
-          this.currentVariantId = `gid://shopify/ProductVariant/${el.value}`;
+          this.currentVariantId = toVariantGid(el.value);
           this.filterImages(this.currentVariantId);
         }
       });
 
-      // Method 3: MutationObserver on hidden input (for JS-driven themes)
+      // Hidden input mutations
       const hiddenInput = document.querySelector('input[name="id"][type="hidden"]');
       if (hiddenInput) {
         const observer = new MutationObserver(() => {
-          const newId = `gid://shopify/ProductVariant/${hiddenInput.value}`;
+          const newId = toVariantGid(hiddenInput.value);
           if (newId !== this.currentVariantId) {
             this.currentVariantId = newId;
             this.filterImages(newId);
@@ -91,83 +103,98 @@
         observer.observe(hiddenInput, { attributes: true, attributeFilter: ["value"] });
       }
 
-      // Method 4: popstate (back/forward navigation with ?variant=)
+      // popstate (back/forward)
       window.addEventListener("popstate", () => {
         this.detectCurrentVariant();
         if (this.currentVariantId) this.filterImages(this.currentVariantId);
       });
+
+      // Re-apply filter after dynamic gallery updates (Horizon swaps slides on variant change)
+      const galleryRoot = document.querySelector(
+        "product-media-gallery, slideshow-component, .product-media-container, .product__media-list"
+      )?.parentElement || document.body;
+      const reapplyObs = new MutationObserver(() => {
+        if (this.currentVariantId) this.filterImages(this.currentVariantId);
+      });
+      reapplyObs.observe(galleryRoot, { childList: true, subtree: true });
     }
 
     filterImages(variantId) {
       const assignedIds = this.assignment[variantId] || [];
-      const allAllowed = new Set([...assignedIds, ...this.commonImages]);
       const showAll = assignedIds.length === 0 && this.commonImages.length === 0;
 
-      const mediaItems = this.getMediaItems();
+      // Build set of numeric media IDs that should be visible
+      const allowedNumeric = new Set(
+        [...assignedIds, ...this.commonImages]
+          .map(toNumericMediaId)
+          .filter(Boolean)
+      );
+      this.allowedNumericIds = showAll ? null : allowedNumeric;
 
-      mediaItems.forEach((item) => {
-        const mediaId = this.extractMediaId(item);
-        const shouldShow = showAll || !mediaId || allAllowed.has(mediaId);
+      this.getMediaItems().forEach((item) => {
+        const numericId = this.extractNumericMediaId(item);
+        const shouldShow = showAll || !numericId || allowedNumeric.has(numericId);
         this.setVisibility(item, shouldShow);
       });
     }
 
     getMediaItems() {
-      // Try multiple gallery patterns used across Shopify themes
-      const selectors = [
-        ".product__media-list .product__media-item",   // Dawn
-        ".product-single__media-group .product-single__media", // Debut
-        "[data-media-id]",                             // Generic
-        ".product__media-wrapper",                     // Impulse/Prestige
-        ".swiper-slide .media",                        // Swiper-based themes
-        ".product-gallery__item",                      // Other common pattern
-      ];
+      // Horizon-specific: each slideshow-slide wraps a media item
+      const horizon = document.querySelectorAll("slideshow-slide");
+      if (horizon.length > 0) return Array.from(horizon);
 
+      // Other patterns - prefer parent containers over leaf elements
+      const selectors = [
+        ".product__media-list .product__media-item",
+        ".product-single__media-group .product-single__media",
+        ".product__media-wrapper",
+        ".product-media-container",
+        ".swiper-slide",
+        ".product-gallery__item",
+      ];
       for (const sel of selectors) {
         const items = document.querySelectorAll(sel);
         if (items.length > 0) return Array.from(items);
       }
-
-      // Fallback: any element with data-media-id
+      // Last resort: every element with a media id (may include thumbs/zoom)
       return Array.from(document.querySelectorAll("[data-media-id]"));
     }
 
-    extractMediaId(el) {
-      // 1. data-media-id attribute (most themes set this)
-      if (el.dataset.mediaId) {
-        return `gid://shopify/MediaImage/${el.dataset.mediaId}`;
+    extractNumericMediaId(el) {
+      // Element itself
+      if (el.dataset?.mediaId) {
+        return toNumericMediaId(el.dataset.mediaId);
       }
-
-      // 2. data-media-id on child element
-      const child = el.querySelector("[data-media-id]");
-      if (child?.dataset.mediaId) {
-        return `gid://shopify/MediaImage/${child.dataset.mediaId}`;
+      // Child with data-media-id
+      const child = el.querySelector?.("[data-media-id]");
+      if (child?.dataset?.mediaId) {
+        return toNumericMediaId(child.dataset.mediaId);
       }
-
-      // 3. Extract from image src URL
-      const img = el.querySelector("img");
+      // Image src fallback
+      const img = el.querySelector?.("img");
       if (img?.src) {
-        const match = img.src.match(/\/(\d{13,})\./);
-        if (match) return `gid://shopify/MediaImage/${match[1]}`;
+        const match = img.src.match(/\/(\d{10,})[\.\-_]/);
+        if (match) return match[1];
       }
-
       return null;
     }
 
     setVisibility(el, visible) {
       if (visible) {
         el.style.transition = `opacity ${TRANSITION_MS}ms ease`;
-        el.style.opacity = "1";
+        el.style.opacity = "";
         el.style.display = "";
         el.style.pointerEvents = "";
         el.removeAttribute("aria-hidden");
+        el.removeAttribute("data-variantis-hidden");
       } else {
         el.style.transition = `opacity ${TRANSITION_MS}ms ease`;
         el.style.opacity = "0";
         el.setAttribute("aria-hidden", "true");
+        el.setAttribute("data-variantis-hidden", "true");
+        // Use display:none after fade so it doesn't take layout space
         setTimeout(() => {
-          // Only hide if still invisible after transition
-          if (el.style.opacity === "0") {
+          if (el.getAttribute("data-variantis-hidden") === "true") {
             el.style.display = "none";
             el.style.pointerEvents = "none";
           }
@@ -176,7 +203,6 @@
     }
   }
 
-  // Boot when DOM is ready
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => new VariantisProductImages());
   } else {
