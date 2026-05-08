@@ -4,12 +4,12 @@
 {% endcomment %}
 
 <script id="variantis-collection-data" type="application/json">
-  {% if template.name == "collection" and collection %}
-    [{{ collection.metafields.variantis.display_config.value | default: "null" }}]
-  {% elsif template.name == "index" %}
-    {{ shop.metafields.variantis.homepage_configs.value | default: "[]" }}
-  {% elsif template.name == "search" %}
-    {{ shop.metafields.variantis.search_configs.value | default: "[]" }}
+  {% if template.name == "collection" and collection and collection.metafields.variantis.display_config.value != blank %}
+    [{{ collection.metafields.variantis.display_config.value | json }}]
+  {% elsif template.name == "index" and shop.metafields.variantis.homepage_configs.value != blank %}
+    {{ shop.metafields.variantis.homepage_configs.value | json }}
+  {% elsif template.name == "search" and shop.metafields.variantis.search_configs.value != blank %}
+    {{ shop.metafields.variantis.search_configs.value | json }}
   {% else %}
     []
   {% endif %}
