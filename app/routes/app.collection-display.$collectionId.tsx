@@ -123,7 +123,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const collectionId = `gid://shopify/Collection/${params.collectionId}`;
   const body = await request.json();
 
@@ -167,6 +167,72 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       },
     });
   }
+
+  // Ensure the metafield definition exists with storefront visibility
+  await admin.graphql(`
+    #graphql
+    mutation EnsureCollectionMetafieldDefinition {
+      metafieldDefinitionCreate(definition: {
+        name: "Variantis Display Config",
+        namespace: "variantis",
+        key: "display_config",
+        type: "json",
+        ownerType: COLLECTION,
+        access: { storefront: PUBLIC_READ }
+      }) {
+        createdDefinition { id }
+        userErrors { field message code }
+      }
+    }
+  `);
+
+  // Build the storefront payload that the theme JS will read
+  type VariantConfig = { variantId: string; productId: string; variantTitle: string; productTitle: string; imageUrl: string; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
+  const variantList: VariantConfig[] = (variants as VariantPayload[]).map((v) => ({
+    variantId: v.variantId,
+    productId: v.productId,
+    variantTitle: v.variantTitle,
+    productTitle: v.productTitle,
+    imageUrl: v.imageUrl,
+    hoverImageUrl: v.hoverImageUrl ?? "",
+    price: v.price,
+    availableForSale: v.availableForSale,
+    optionValue: v.optionValue,
+    visible: v.visible,
+    position: v.position,
+  }));
+
+  const storefrontConfig = {
+    enabled,
+    splitByOption,
+    hideOutOfStock,
+    showOnlyDiscount,
+    hideWithoutImage,
+    titleFormat,
+    customTitleFormat,
+    variants: variantList,
+  };
+
+  // Write the metafield to the collection so the theme can read it
+  await admin.graphql(`
+    #graphql
+    mutation SetCollectionDisplayConfig($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { id key namespace value }
+        userErrors { field message }
+      }
+    }
+  `, {
+    variables: {
+      metafields: [{
+        ownerId: collectionId,
+        namespace: "variantis",
+        key: "display_config",
+        value: JSON.stringify(storefrontConfig),
+        type: "json",
+      }],
+    },
+  });
 
   return json({ ok: true });
 };

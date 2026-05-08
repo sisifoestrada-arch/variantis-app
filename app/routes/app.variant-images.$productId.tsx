@@ -127,6 +127,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     commonImages: body.commonImages,
   });
 
+  // Ensure metafield definition exists with storefront visibility
+  await admin.graphql(`
+    #graphql
+    mutation EnsureProductMetafieldDefinition {
+      metafieldDefinitionCreate(definition: {
+        name: "Variantis Image Assignment",
+        namespace: "variantis",
+        key: "image_assignment",
+        type: "json",
+        ownerType: PRODUCT,
+        access: { storefront: PUBLIC_READ }
+      }) {
+        createdDefinition { id }
+        userErrors { field message code }
+      }
+    }
+  `);
+
   await admin.graphql(`
     #graphql
     mutation setVariantImageAssignment($metafields: [MetafieldsSetInput!]!) {
