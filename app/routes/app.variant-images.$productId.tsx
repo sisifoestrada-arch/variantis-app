@@ -213,6 +213,21 @@ export default function VariantImageAssignment() {
     );
   }, []);
 
+  const moveImageInVariant = useCallback(
+    (variantId: string, mediaId: string, direction: -1 | 1) => {
+      setAssignment((prev) => {
+        const current = [...(prev[variantId] ?? [])];
+        const idx = current.indexOf(mediaId);
+        if (idx === -1) return prev;
+        const newIdx = idx + direction;
+        if (newIdx < 0 || newIdx >= current.length) return prev;
+        [current[idx], current[newIdx]] = [current[newIdx], current[idx]];
+        return { ...prev, [variantId]: current };
+      });
+    },
+    [],
+  );
+
   const save = () => {
     fetcher.submit(
       { assignment, commonImages } as unknown as Record<string, string>,
@@ -398,27 +413,94 @@ export default function VariantImageAssignment() {
                           }}
                         />
                         {isAssigned && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: 6,
-                              right: 6,
-                              background: "#008060",
-                              color: "white",
-                              borderRadius: "999px",
-                              minWidth: 28,
-                              height: 28,
-                              padding: "0 8px",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontSize: 14,
-                              fontWeight: "bold",
-                              boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
-                            }}
-                          >
-                            {assignedIdx + 1}
-                          </div>
+                          <>
+                            <div
+                              style={{
+                                position: "absolute",
+                                top: 6,
+                                right: 6,
+                                background: "#008060",
+                                color: "white",
+                                borderRadius: "999px",
+                                minWidth: 28,
+                                height: 28,
+                                padding: "0 8px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: 14,
+                                fontWeight: "bold",
+                                boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                              }}
+                            >
+                              {assignedIdx + 1}
+                            </div>
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                position: "absolute",
+                                top: 6,
+                                left: 6,
+                                display: "flex",
+                                gap: 4,
+                              }}
+                            >
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  moveImageInVariant(activeVariant, m.id, -1);
+                                }}
+                                disabled={assignedIdx === 0}
+                                style={{
+                                  width: 24,
+                                  height: 24,
+                                  borderRadius: 4,
+                                  border: "none",
+                                  background: "rgba(0,0,0,0.7)",
+                                  color: "white",
+                                  cursor: assignedIdx === 0 ? "not-allowed" : "pointer",
+                                  opacity: assignedIdx === 0 ? 0.4 : 1,
+                                  fontSize: 14,
+                                  fontWeight: "bold",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                                title="Move earlier"
+                              >
+                                ←
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  moveImageInVariant(activeVariant, m.id, 1);
+                                }}
+                                disabled={assignedIdx === currentAssigned.length - 1}
+                                style={{
+                                  width: 24,
+                                  height: 24,
+                                  borderRadius: 4,
+                                  border: "none",
+                                  background: "rgba(0,0,0,0.7)",
+                                  color: "white",
+                                  cursor:
+                                    assignedIdx === currentAssigned.length - 1
+                                      ? "not-allowed"
+                                      : "pointer",
+                                  opacity:
+                                    assignedIdx === currentAssigned.length - 1 ? 0.4 : 1,
+                                  fontSize: 14,
+                                  fontWeight: "bold",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                                title="Move later"
+                              >
+                                →
+                              </button>
+                            </div>
+                          </>
                         )}
                         {isCommon && (
                           <div
