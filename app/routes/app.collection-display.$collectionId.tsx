@@ -125,7 +125,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       const variant = ve.node;
       const firstOption = variant.selectedOptions[0];
 
-      // Module A: variant-specific assigned images, in user-defined order
+      // Module A: variant-specific assigned images, in user-defined order (#1, #2, #3...)
       const assignedMediaIds = imageAssignment[variant.id] ?? [];
       const assignedUrls = assignedMediaIds
         .map((id) => mediaUrlMap.get(id))
@@ -135,21 +135,25 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         .map((id) => mediaUrlMap.get(id))
         .filter((u): u is string => Boolean(u));
 
-      // FORCE the Shopify variant image (miniatura) as position 0
-      const variantThumbnail = variant.image?.url ?? "";
-
-      // Build final list: [variantThumbnail, ...assigned (excluding thumbnail), ...common (excluding thumbnail)]
+      // Build final list with deduplication, RESPECTING user-defined order:
+      //   1. Assigned images in admin selection order (#1, #2, #3...)
+      //   2. Common images
+      //   3. Shopify variant.image as last-resort fallback only if nothing else
       const seen = new Set<string>();
       const finalUrls: string[] = [];
-      const pushUnique = (u: string) => {
+      const pushUnique = (u: string | undefined | null) => {
         if (!u || seen.has(u)) return;
         seen.add(u);
         finalUrls.push(u);
       };
 
-      pushUnique(variantThumbnail);
       assignedUrls.forEach(pushUnique);
       commonUrls.forEach(pushUnique);
+
+      // Fallback: only use Shopify's default variant image if user assigned nothing
+      if (finalUrls.length === 0 && variant.image?.url) {
+        pushUnique(variant.image.url);
+      }
 
       const primaryUrl = finalUrls[0] ?? "";
 
