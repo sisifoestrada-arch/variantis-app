@@ -171,11 +171,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
   }
 
-  // Ensure the metafield definition exists with storefront visibility
+  // Ensure metafield definitions exist (collection-level + shop-level)
   await admin.graphql(`
     #graphql
-    mutation EnsureCollectionMetafieldDefinition {
-      metafieldDefinitionCreate(definition: {
+    mutation EnsureMetafieldDefinitions {
+      collectionDef: metafieldDefinitionCreate(definition: {
         name: "Variantis Display Config",
         namespace: "variantis",
         key: "display_config",
@@ -186,10 +186,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         createdDefinition { id }
         userErrors { field message code }
       }
+      shopDef: metafieldDefinitionCreate(definition: {
+        name: "Variantis All Configs",
+        namespace: "variantis",
+        key: "all_configs",
+        type: "json",
+        ownerType: SHOP,
+        access: { storefront: PUBLIC_READ }
+      }) {
+        createdDefinition { id }
+        userErrors { field message code }
+      }
     }
   `);
 
-  // Build the storefront payload that the theme JS will read
+  // Build the storefront payload for THIS collection
   type VariantConfig = { variantId: string; productId: string; productHandle: string; variantTitle: string; productTitle: string; imageUrl: string; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
   const variantList: VariantConfig[] = (variants as VariantPayload[]).map((v) => ({
     variantId: v.variantId,
@@ -207,6 +218,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }));
 
   const storefrontConfig = {
+    collectionId,
     enabled,
     splitByOption,
     hideOutOfStock,
@@ -217,10 +229,60 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     variants: variantList,
   };
 
-  // Write the metafield to the collection so the theme can read it
+  // Build the GLOBAL config: aggregate variants from ALL configured collections
+  // so homepage / search / arbitrary product cards all benefit
+  const allConfigs = await db.collectionConfig.findMany({
+    where: { shop: session.shop },
+    include: { variants: true },
+  });
+
+  // Map productHandle → unified variant entry (deduplicate across collections)
+  const handleToVariants = new Map<string, VariantConfig[]>();
+  // Include the current save first (most up-to-date data)
+  for (const v of variantList) {
+    if (!v.productHandle) continue;
+    if (!handleToVariants.has(v.productHandle)) handleToVariants.set(v.productHandle, []);
+    handleToVariants.get(v.productHandle)!.push(v);
+  }
+
+  const globalConfig = {
+    enabled,
+    splitByOption,
+    hideOutOfStock,
+    showOnlyDiscount,
+    hideWithoutImage,
+    titleFormat,
+    customTitleFormat,
+    // Map of productHandle → array of variant entries
+    productHandles: Object.fromEntries(handleToVariants),
+    // Per-collection settings keyed by collection GID
+    collections: Object.fromEntries(
+      allConfigs.map((c) => [
+        c.collectionId,
+        {
+          enabled: c.enabled,
+          splitByOption: c.splitByOption,
+          hideOutOfStock: c.hideOutOfStock,
+          showOnlyDiscount: c.showOnlyDiscount,
+          hideWithoutImage: c.hideWithoutImage,
+          titleFormat: c.titleFormat,
+          customTitleFormat: c.customTitleFormat,
+        },
+      ]),
+    ),
+  };
+
+  // Get the actual shop GID
+  const shopRes = await admin.graphql(`#graphql
+    query { shop { id } }
+  `);
+  const shopData = await shopRes.json();
+  const shopGid = shopData.data.shop.id;
+
+  // Write metafields: collection-specific + shop-level global
   await admin.graphql(`
     #graphql
-    mutation SetCollectionDisplayConfig($metafields: [MetafieldsSetInput!]!) {
+    mutation SetMetafields($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields { id key namespace value }
         userErrors { field message }
@@ -228,13 +290,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   `, {
     variables: {
-      metafields: [{
-        ownerId: collectionId,
-        namespace: "variantis",
-        key: "display_config",
-        value: JSON.stringify(storefrontConfig),
-        type: "json",
-      }],
+      metafields: [
+        {
+          ownerId: collectionId,
+          namespace: "variantis",
+          key: "display_config",
+          value: JSON.stringify(storefrontConfig),
+          type: "json",
+        },
+        {
+          ownerId: shopGid,
+          namespace: "variantis",
+          key: "all_configs",
+          value: JSON.stringify(globalConfig),
+          type: "json",
+        },
+      ],
     },
   });
 

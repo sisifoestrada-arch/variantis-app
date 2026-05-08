@@ -1,18 +1,12 @@
 {% comment %}
   Variantis – Module B: Collection Display
   App Embed Block — injects on collection, index, and search templates.
+  Reads from a single shop-level metafield that contains configs for all
+  configured collections, so it works on homepage / search / arbitrary pages.
 {% endcomment %}
 
 <script id="variantis-collection-data" type="application/json">
-  {% if template.name == "collection" and collection and collection.metafields.variantis.display_config.value != blank %}
-    [{{ collection.metafields.variantis.display_config.value | json }}]
-  {% elsif template.name == "index" and shop.metafields.variantis.homepage_configs.value != blank %}
-    {{ shop.metafields.variantis.homepage_configs.value | json }}
-  {% elsif template.name == "search" and shop.metafields.variantis.search_configs.value != blank %}
-    {{ shop.metafields.variantis.search_configs.value | json }}
-  {% else %}
-    []
-  {% endif %}
+  {{ shop.metafields.variantis.all_configs.value | json }}
 </script>
 
 <script src="{{ 'variantis-collection.js' | asset_url }}" defer></script>

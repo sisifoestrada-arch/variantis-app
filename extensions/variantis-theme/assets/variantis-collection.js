@@ -1,249 +1,211 @@
 /**
  * Variantis – Module B: Collection Display
- * Shows product variants as separate cards in collection / homepage / search pages.
- * Config is injected via the liquid block from the app proxy endpoint.
+ * Splits product cards by variant on collection / homepage / search pages.
+ *
+ * Reads shop.metafields.variantis.all_configs which has shape:
+ * {
+ *   enabled, splitByOption, hideOutOfStock, showOnlyDiscount, hideWithoutImage,
+ *   titleFormat, customTitleFormat,
+ *   productHandles: { "<handle>": [variant, variant, ...] },
+ *   collections: { "<collectionGid>": {settings...} }
+ * }
+ *
+ * Each variant entry shape:
+ * { variantId, productId, productHandle, variantTitle, productTitle,
+ *   imageUrl, hoverImageUrl, price, availableForSale, optionValue,
+ *   visible, position }
  */
 (function () {
   "use strict";
 
-  class VariantisCollection {
-    constructor(config) {
-      this.config = config;
-      // config shape:
-      // {
-      //   collectionId: string,
-      //   enabled: boolean,
-      //   splitByOption: string,
-      //   hideOutOfStock: boolean,
-      //   showOnlyDiscount: boolean,
-      //   hideWithoutImage: boolean,
-      //   titleFormat: "product_variant" | "variant_only" | "product_only" | "custom",
-      //   customTitleFormat: string,
-      //   variants: [{ variantId, productId, variantTitle, productTitle, imageUrl,
-      //                hoverImageUrl, price, availableForSale, visible, position }]
-      // }
-      this.run();
+  function findCards() {
+    const selectors = [
+      "product-card",
+      "[data-product-handle]",
+      ".product-item",
+      ".grid__item",
+      "li.grid__item",
+      ".collection-grid__item",
+      ".product-card",
+      ".card-wrapper",
+      "[data-product-id]",
+      ".boost-pfs-filter-product-item",
+    ];
+    for (const sel of selectors) {
+      const items = document.querySelectorAll(sel);
+      if (items.length === 0) continue;
+      const filtered = Array.from(items).filter((el) =>
+        !!el.querySelector("a[href*='/products/']")
+      );
+      if (filtered.length > 0) return filtered;
     }
+    return [];
+  }
 
-    run() {
-      if (!this.config.enabled) return;
+  function getProductHandle(card) {
+    if (card.dataset?.productHandle) return card.dataset.productHandle;
+    const link = card.querySelector("a[href*='/products/']");
+    if (!link) return null;
+    const match = link.href.match(/\/products\/([^?#/]+)/);
+    return match ? match[1] : null;
+  }
 
-      // Find all product cards in the collection grid
-      const productCards = this.findProductCards();
-      if (productCards.length === 0) return;
-
-      productCards.forEach((card) => this.expandCard(card));
-    }
-
-    findProductCards() {
-      const selectors = [
-        // Horizon (custom elements)
-        "product-card",
-        "[data-product-handle]",
-        // Dawn / standard
-        ".product-item",
-        ".grid__item",
-        "li.grid__item",
-        ".collection-grid__item",
-        ".product-card",
-        ".card-wrapper",
-        // Generic
-        "[data-product-id]",
-        ".boost-pfs-filter-product-item",
-      ];
-
-      for (const sel of selectors) {
-        const items = document.querySelectorAll(sel);
-        if (items.length > 0) {
-          // Make sure we're getting cards, not nested duplicates
-          const filtered = Array.from(items).filter((el) => {
-            // Must contain a product link
-            return !!el.querySelector("a[href*='/products/']");
-          });
-          if (filtered.length > 0) return filtered;
-        }
-      }
-      return [];
-    }
-
-    getProductIdFromCard(card) {
-      // Try data attributes first
-      if (card.dataset.productId) return card.dataset.productId;
-
-      // Try link href pattern /products/handle
-      const link = card.querySelector("a[href*='/products/']");
-      if (!link) return null;
-
-      // Extract handle, then match against our variant list by title
-      const match = link.href.match(/\/products\/([^?#/]+)/);
-      return match ? match[1] : null; // returns handle
-    }
-
-    expandCard(card) {
-      // Skip cards we already expanded
-      if (card.dataset.variantis === "true") return;
-
-      const productHandle = this.getProductHandleFromCard(card);
-      if (!productHandle) return;
-
-      // Get all variants for this product that should be shown
-      const productVariants = this.config.variants.filter((v) => {
-        const handle =
-          v.productHandle ||
-          v.productTitle?.toLowerCase().replace(/\s+/g, "-") ||
-          "";
-        return handle === productHandle && v.visible;
-      });
-
-      if (productVariants.length <= 1) return; // Nothing to expand
-
-      // Apply display rules
-      const visibleVariants = productVariants.filter((v) => {
-        if (this.config.hideOutOfStock && !v.availableForSale) return false;
-        if (this.config.hideWithoutImage && !v.imageUrl) return false;
-        return true;
-      });
-
-      if (visibleVariants.length <= 1) return;
-
-      // Sort by position
-      visibleVariants.sort((a, b) => a.position - b.position);
-
-      // Replace the single card with multiple variant cards
-      const parent = card.parentElement;
-      if (!parent) return;
-
-      const insertBefore = card.nextSibling;
-
-      visibleVariants.forEach((v, idx) => {
-        const newCard = this.createVariantCard(card, v);
-        if (idx === 0) {
-          // Replace original card
-          parent.replaceChild(newCard, card);
-        } else {
-          parent.insertBefore(newCard, insertBefore);
-        }
-      });
-    }
-
-    getProductHandleFromCard(card) {
-      const link = card.querySelector("a[href*='/products/']");
-      if (!link) return null;
-      const match = link.href.match(/\/products\/([^?#/]+)/);
-      return match ? match[1] : null;
-    }
-
-    buildTitle(variant) {
-      const { titleFormat, customTitleFormat } = this.config;
-      switch (titleFormat) {
-        case "variant_only":
-          return variant.variantTitle;
-        case "product_only":
-          return variant.productTitle;
-        case "custom":
-          return (customTitleFormat || "{product} - {variant}")
-            .replace("{product}", variant.productTitle)
-            .replace("{variant}", variant.variantTitle);
-        default: // product_variant
-          return `${variant.productTitle} - ${variant.variantTitle}`;
-      }
-    }
-
-    createVariantCard(originalCard, variant) {
-      const clone = originalCard.cloneNode(true);
-
-      // Update image
-      const img = clone.querySelector("img");
-      if (img && variant.imageUrl) {
-        img.src = variant.imageUrl;
-        img.srcset = variant.imageUrl;
-        img.alt = this.buildTitle(variant);
-
-        // Hover image
-        if (variant.hoverImageUrl) {
-          img.addEventListener("mouseenter", () => {
-            img.src = variant.hoverImageUrl;
-          });
-          img.addEventListener("mouseleave", () => {
-            img.src = variant.imageUrl;
-          });
-        }
-      }
-
-      // Update title
-      const titleEl =
-        clone.querySelector(".card__heading a") ||
-        clone.querySelector(".product-item__title") ||
-        clone.querySelector("h2 a") ||
-        clone.querySelector("h3 a") ||
-        clone.querySelector(".product-card__title");
-
-      if (titleEl) titleEl.textContent = this.buildTitle(variant);
-
-      // Update price (show variant price)
-      const priceEl =
-        clone.querySelector(".price__regular .price-item") ||
-        clone.querySelector(".product-item__price") ||
-        clone.querySelector(".price");
-      if (priceEl && variant.price) {
-        priceEl.textContent = this.formatMoney(parseFloat(variant.price));
-      }
-
-      // Update links to point to variant-specific URL
-      clone.querySelectorAll("a[href*='/products/']").forEach((link) => {
-        const variantNumericId = variant.variantId.replace(
-          "gid://shopify/ProductVariant/",
-          "",
-        );
-        const url = new URL(link.href);
-        url.searchParams.set("variant", variantNumericId);
-        link.href = url.toString();
-      });
-
-      // Update add-to-cart form
-      const variantInput = clone.querySelector('input[name="id"]');
-      if (variantInput) {
-        variantInput.value = variant.variantId.replace(
-          "gid://shopify/ProductVariant/",
-          "",
-        );
-      }
-
-      // Sold out badge
-      if (!variant.availableForSale) {
-        const badge = clone.querySelector(".badge, .product-item__badge");
-        if (badge) {
-          badge.textContent = "Sold out";
-          badge.style.display = "";
-        }
-      }
-
-      // Mark as variantis-generated
-      clone.setAttribute("data-variantis", "true");
-      clone.setAttribute("data-variant-id", variant.variantId);
-
-      return clone;
-    }
-
-    formatMoney(amount) {
-      return new Intl.NumberFormat(document.documentElement.lang || "en", {
-        style: "currency",
-        currency: window.Shopify?.currency?.active || "USD",
-      }).format(amount);
+  function buildTitle(variant, settings) {
+    const fmt = settings.titleFormat || "product_variant";
+    switch (fmt) {
+      case "variant_only":
+        return variant.variantTitle;
+      case "product_only":
+        return variant.productTitle;
+      case "custom":
+        return (settings.customTitleFormat || "{product} - {variant}")
+          .replace("{product}", variant.productTitle)
+          .replace("{variant}", variant.variantTitle);
+      default:
+        return `${variant.productTitle} - ${variant.variantTitle}`;
     }
   }
 
-  // Boot: config is injected by the liquid block
+  function formatMoney(amount) {
+    if (!amount) return "";
+    return new Intl.NumberFormat(document.documentElement.lang || "en", {
+      style: "currency",
+      currency: window.Shopify?.currency?.active || "USD",
+    }).format(parseFloat(amount));
+  }
+
+  function createVariantCard(originalCard, variant, settings) {
+    const clone = originalCard.cloneNode(true);
+
+    // Update image
+    const img = clone.querySelector("img");
+    if (img && variant.imageUrl) {
+      img.src = variant.imageUrl;
+      if (img.srcset) img.srcset = variant.imageUrl;
+      img.alt = buildTitle(variant, settings);
+
+      if (variant.hoverImageUrl) {
+        img.addEventListener("mouseenter", () => { img.src = variant.hoverImageUrl; });
+        img.addEventListener("mouseleave", () => { img.src = variant.imageUrl; });
+      }
+    }
+
+    // Update title (multiple theme patterns)
+    const titleEl =
+      clone.querySelector(".card__heading a") ||
+      clone.querySelector(".card__heading") ||
+      clone.querySelector(".product-item__title") ||
+      clone.querySelector(".product-card__title") ||
+      clone.querySelector("h2 a") ||
+      clone.querySelector("h3 a") ||
+      clone.querySelector("h2") ||
+      clone.querySelector("h3");
+    if (titleEl) titleEl.textContent = buildTitle(variant, settings);
+
+    // Update price
+    const priceEls = clone.querySelectorAll(
+      ".price__regular .price-item, .price-item--regular, .product-item__price, .price, [class*='price']"
+    );
+    priceEls.forEach((el) => {
+      if (el.querySelector("*")) return; // skip wrappers
+      if (variant.price) el.textContent = formatMoney(variant.price);
+    });
+
+    // Update product links to ?variant=...
+    const variantNumeric = String(variant.variantId).replace(
+      /^gid:\/\/shopify\/ProductVariant\//,
+      ""
+    );
+    clone.querySelectorAll("a[href*='/products/']").forEach((link) => {
+      try {
+        const url = new URL(link.href, window.location.origin);
+        url.searchParams.set("variant", variantNumeric);
+        link.href = url.toString();
+      } catch {}
+    });
+
+    // Update add-to-cart variant input
+    const variantInput = clone.querySelector('input[name="id"]');
+    if (variantInput) variantInput.value = variantNumeric;
+
+    // Sold out badge
+    if (!variant.availableForSale) {
+      const badge = clone.querySelector(".badge, .product-item__badge");
+      if (badge) {
+        badge.textContent = "Sold out";
+        badge.style.display = "";
+      }
+    }
+
+    clone.setAttribute("data-variantis", "true");
+    clone.setAttribute("data-variant-id", variant.variantId);
+    return clone;
+  }
+
+  function expandCard(card, config) {
+    if (card.dataset?.variantis === "true") return;
+    const handle = getProductHandle(card);
+    if (!handle) return;
+
+    const variants = config.productHandles?.[handle];
+    if (!variants || variants.length <= 1) return;
+
+    // Apply visibility rules
+    const visible = variants
+      .filter((v) => v.visible !== false)
+      .filter((v) => !(config.hideOutOfStock && !v.availableForSale))
+      .filter((v) => !(config.hideWithoutImage && !v.imageUrl))
+      .sort((a, b) => (a.position || 0) - (b.position || 0));
+
+    if (visible.length <= 1) return;
+
+    const parent = card.parentElement;
+    if (!parent) return;
+
+    const insertBefore = card.nextSibling;
+
+    visible.forEach((v, idx) => {
+      const newCard = createVariantCard(card, v, config);
+      if (idx === 0) {
+        parent.replaceChild(newCard, card);
+      } else {
+        parent.insertBefore(newCard, insertBefore);
+      }
+    });
+  }
+
+  function run(config) {
+    if (!config || !config.enabled) return;
+    const cards = findCards();
+    cards.forEach((card) => expandCard(card, config));
+  }
+
   function boot() {
     const dataEl = document.getElementById("variantis-collection-data");
     if (!dataEl) return;
 
+    let config;
     try {
-      const configs = JSON.parse(dataEl.textContent || "[]");
-      configs.forEach((config) => new VariantisCollection(config));
+      const raw = dataEl.textContent?.trim();
+      if (!raw || raw === "[]" || raw === "null") return;
+      config = JSON.parse(raw);
     } catch (e) {
       console.warn("[Variantis] Could not parse collection config", e);
+      return;
     }
+
+    // Support both old and new format
+    if (Array.isArray(config)) {
+      // Legacy: array of per-collection configs — pick first
+      config = config[0];
+      if (!config) return;
+    }
+
+    run(config);
+
+    // Re-run when DOM changes (filters, infinite scroll, AJAX pagination)
+    const observer = new MutationObserver(() => run(config));
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   if (document.readyState === "loading") {
