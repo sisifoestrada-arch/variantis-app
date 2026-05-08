@@ -27,6 +27,7 @@ import db from "../db.server";
 interface VariantInfo {
   variantId: string;
   productId: string;
+  productHandle: string;
   variantTitle: string;
   productTitle: string;
   imageUrl: string;
@@ -51,6 +52,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
             node {
               id
               title
+              handle
               options { name values }
               variants(first: 20) {
                 edges {
@@ -91,6 +93,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       allVariants.push({
         variantId: variant.id,
         productId: product.id,
+        productHandle: product.handle,
         variantTitle: variant.title,
         productTitle: product.title,
         imageUrl: variant.image?.url ?? "",
@@ -187,10 +190,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   `);
 
   // Build the storefront payload that the theme JS will read
-  type VariantConfig = { variantId: string; productId: string; variantTitle: string; productTitle: string; imageUrl: string; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
+  type VariantConfig = { variantId: string; productId: string; productHandle: string; variantTitle: string; productTitle: string; imageUrl: string; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
   const variantList: VariantConfig[] = (variants as VariantPayload[]).map((v) => ({
     variantId: v.variantId,
     productId: v.productId,
+    productHandle: v.productHandle,
     variantTitle: v.variantTitle,
     productTitle: v.productTitle,
     imageUrl: v.imageUrl,

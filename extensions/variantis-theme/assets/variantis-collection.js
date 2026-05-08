@@ -37,18 +37,31 @@
 
     findProductCards() {
       const selectors = [
-        ".product-item",          // Common
-        ".grid__item",            // Dawn
-        ".collection-grid__item", // Debut
-        "[data-product-id]",      // Generic
-        ".product-card",          // Prestige/Impulse
-        "li.grid__item",          // Various
-        ".boost-pfs-filter-product-item", // Boost filter app
+        // Horizon (custom elements)
+        "product-card",
+        "[data-product-handle]",
+        // Dawn / standard
+        ".product-item",
+        ".grid__item",
+        "li.grid__item",
+        ".collection-grid__item",
+        ".product-card",
+        ".card-wrapper",
+        // Generic
+        "[data-product-id]",
+        ".boost-pfs-filter-product-item",
       ];
 
       for (const sel of selectors) {
         const items = document.querySelectorAll(sel);
-        if (items.length > 0) return Array.from(items);
+        if (items.length > 0) {
+          // Make sure we're getting cards, not nested duplicates
+          const filtered = Array.from(items).filter((el) => {
+            // Must contain a product link
+            return !!el.querySelector("a[href*='/products/']");
+          });
+          if (filtered.length > 0) return filtered;
+        }
       }
       return [];
     }
@@ -67,12 +80,18 @@
     }
 
     expandCard(card) {
+      // Skip cards we already expanded
+      if (card.dataset.variantis === "true") return;
+
       const productHandle = this.getProductHandleFromCard(card);
       if (!productHandle) return;
 
       // Get all variants for this product that should be shown
       const productVariants = this.config.variants.filter((v) => {
-        const handle = v.productHandle || v.productTitle.toLowerCase().replace(/\s+/g, "-");
+        const handle =
+          v.productHandle ||
+          v.productTitle?.toLowerCase().replace(/\s+/g, "-") ||
+          "";
         return handle === productHandle && v.visible;
       });
 
