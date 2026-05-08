@@ -188,17 +188,33 @@
 
     if (visible.length <= 1) return;
 
-    const parent = card.parentElement;
-    if (!parent) return;
+    // Find the grid item wrapper (the element that's actually the grid child)
+    const gridItem =
+      card.closest(
+        ".resource-list__item, .grid__item, li, .collection-grid__item, .card-wrapper"
+      ) || card;
 
-    const insertBefore = card.nextSibling;
+    const itemParent = gridItem.parentElement;
+    if (!itemParent) return;
+
+    const insertBefore = gridItem.nextSibling;
 
     visible.forEach((v, idx) => {
-      const newCard = createVariantCard(card, v, config);
+      // Clone the grid item wrapper, then update the inner product-card
+      const newWrapper = gridItem.cloneNode(true);
+      const innerCard = newWrapper.querySelector("product-card") || newWrapper;
+      const transformed = createVariantCard(innerCard, v, config);
+      // Replace the inner product-card with the transformed clone
+      if (transformed !== innerCard) {
+        innerCard.parentNode?.replaceChild(transformed, innerCard);
+      }
+      // Mark the wrapper so we know it's variantis
+      newWrapper.setAttribute("data-variantis-wrapper", "true");
+
       if (idx === 0) {
-        parent.replaceChild(newCard, card);
+        itemParent.replaceChild(newWrapper, gridItem);
       } else {
-        parent.insertBefore(newCard, insertBefore);
+        itemParent.insertBefore(newWrapper, insertBefore);
       }
     });
   }
