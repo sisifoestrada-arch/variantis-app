@@ -1,11 +1,12 @@
 FROM node:20-bookworm-slim
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
-EXPOSE 3000
+EXPOSE 8080
 
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV PORT=8080
 
 COPY package.json package-lock.json* ./
 
