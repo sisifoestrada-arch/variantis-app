@@ -77,6 +77,39 @@
   function createVariantCard(originalCard, variant, settings) {
     const clone = originalCard.cloneNode(true);
 
+    const variantNumeric = String(variant.variantId).replace(
+      /^gid:\/\/shopify\/ProductVariant\//,
+      ""
+    );
+    const uniqueSuffix = `variantis-${variantNumeric}`;
+
+    // Make element ID unique to avoid Horizon dedup
+    if (clone.id) clone.id = `${clone.id}-${uniqueSuffix}`;
+    // Override data-product-id with variant ID so the custom element treats it as distinct
+    if (clone.dataset) {
+      clone.dataset.productId = variantNumeric;
+      clone.dataset.variantId = variantNumeric;
+    }
+    // Rewrite all inner element IDs so DOM stays valid
+    clone.querySelectorAll("[id]").forEach((el) => {
+      el.id = `${el.id}-${uniqueSuffix}`;
+    });
+    clone.querySelectorAll("[for]").forEach((el) => {
+      el.setAttribute("for", `${el.getAttribute("for")}-${uniqueSuffix}`);
+    });
+    clone.querySelectorAll("[aria-controls]").forEach((el) => {
+      el.setAttribute(
+        "aria-controls",
+        `${el.getAttribute("aria-controls")}-${uniqueSuffix}`
+      );
+    });
+    clone.querySelectorAll("[aria-labelledby]").forEach((el) => {
+      el.setAttribute(
+        "aria-labelledby",
+        `${el.getAttribute("aria-labelledby")}-${uniqueSuffix}`
+      );
+    });
+
     // Update image
     const img = clone.querySelector("img");
     if (img && variant.imageUrl) {
@@ -112,10 +145,6 @@
     });
 
     // Update product links to ?variant=...
-    const variantNumeric = String(variant.variantId).replace(
-      /^gid:\/\/shopify\/ProductVariant\//,
-      ""
-    );
     clone.querySelectorAll("a[href*='/products/']").forEach((link) => {
       try {
         const url = new URL(link.href, window.location.origin);
@@ -201,10 +230,41 @@
       if (!config) return;
     }
 
-    run(config);
+    let scheduled = false;
+    let isRunning = false;
+
+    const scheduledRun = () => {
+      if (scheduled || isRunning) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        isRunning = true;
+        try {
+          run(config);
+        } finally {
+          // Small delay before allowing observer to react again
+          setTimeout(() => { isRunning = false; }, 100);
+        }
+      });
+    };
+
+    // Initial run + small delay to let theme finish first paint
+    setTimeout(() => scheduledRun(), 100);
 
     // Re-run when DOM changes (filters, infinite scroll, AJAX pagination)
-    const observer = new MutationObserver(() => run(config));
+    const observer = new MutationObserver((mutations) => {
+      if (isRunning) return;
+      // Only react to mutations that add product cards we haven't expanded yet
+      const interesting = mutations.some((m) =>
+        Array.from(m.addedNodes).some((n) => {
+          if (!(n instanceof Element)) return false;
+          if (n.dataset?.variantis === "true") return false;
+          return n.matches?.("product-card, .product-item, .grid__item, .card-wrapper") ||
+            n.querySelector?.("product-card, .product-item, .grid__item, .card-wrapper");
+        })
+      );
+      if (interesting) scheduledRun();
+    });
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
