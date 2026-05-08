@@ -222,74 +222,54 @@ export default function VariantImageAssignment() {
 
   const handleDrop = (
     e: React.DragEvent,
-    targetVariantId: string, // variantId | "common" | "pool"
+    target: string, // variantId | "common" | "pool"
     targetIndex?: number,
   ) => {
     e.preventDefault();
+    e.stopPropagation();
     setDragOverTarget(null);
     const mediaId = e.dataTransfer.getData("mediaId");
     const source = e.dataTransfer.getData("source");
     if (!mediaId) return;
 
-    setAssignment((prev) => {
-      const updated: ImageAssignment = { ...prev };
-
-      // Remove from source (if it's a variant)
-      if (source !== "pool" && source !== "common" && source !== targetVariantId) {
-        updated[source] = (updated[source] ?? []).filter((id) => id !== mediaId);
-      }
-
-      // Reorder within same variant
-      if (source === targetVariantId) {
-        const list = [...(updated[targetVariantId] ?? [])];
+    // Reorder within the same variant — single state update
+    if (source === target && source !== "pool" && source !== "common") {
+      setAssignment((prev) => {
+        const list = [...(prev[target] ?? [])];
         const fromIdx = list.indexOf(mediaId);
-        if (fromIdx !== -1) {
-          list.splice(fromIdx, 1);
-          const insertAt = targetIndex !== undefined ? Math.min(targetIndex, list.length) : list.length;
-          list.splice(insertAt, 0, mediaId);
-          updated[targetVariantId] = list;
-        }
-        return updated;
-      }
+        if (fromIdx === -1) return prev;
+        list.splice(fromIdx, 1);
+        const insertAt = targetIndex !== undefined ? Math.min(targetIndex, list.length) : list.length;
+        list.splice(insertAt, 0, mediaId);
+        return { ...prev, [target]: list };
+      });
+      return;
+    }
 
-      // Add to target variant
-      if (targetVariantId !== "common" && targetVariantId !== "pool") {
-        const list = [...(updated[targetVariantId] ?? [])];
-        if (!list.includes(mediaId)) {
-          const insertAt = targetIndex !== undefined ? Math.min(targetIndex, list.length) : list.length;
-          list.splice(insertAt, 0, mediaId);
-          updated[targetVariantId] = list;
-        }
+    // For all other cases: rebuild both states atomically
+    setAssignment((prev) => {
+      const updated: ImageAssignment = {};
+      for (const k of Object.keys(prev)) {
+        // Remove mediaId from every variant first (clean slate)
+        updated[k] = (prev[k] ?? []).filter((id) => id !== mediaId);
+      }
+      // Add to target variant if it's a real variant
+      if (target !== "common" && target !== "pool") {
+        const list = [...(updated[target] ?? [])];
+        const insertAt = targetIndex !== undefined ? Math.min(targetIndex, list.length) : list.length;
+        list.splice(insertAt, 0, mediaId);
+        updated[target] = list;
       }
       return updated;
     });
 
-    // Common drop zone
-    if (targetVariantId === "common") {
-      setCommonImages((prev) => (prev.includes(mediaId) ? prev : [...prev, mediaId]));
-      // Remove from all variants
-      setAssignment((prev) => {
-        const updated: ImageAssignment = {};
-        for (const k of Object.keys(prev)) {
-          updated[k] = (prev[k] ?? []).filter((id) => id !== mediaId);
-        }
-        return updated;
-      });
-    } else if (source === "common") {
-      setCommonImages((prev) => prev.filter((id) => id !== mediaId));
-    }
-
-    // Pool drop zone (drag back to pool removes from everywhere)
-    if (targetVariantId === "pool") {
-      setAssignment((prev) => {
-        const updated: ImageAssignment = {};
-        for (const k of Object.keys(prev)) {
-          updated[k] = (prev[k] ?? []).filter((id) => id !== mediaId);
-        }
-        return updated;
-      });
-      setCommonImages((prev) => prev.filter((id) => id !== mediaId));
-    }
+    setCommonImages((prev) => {
+      if (target === "common") {
+        return prev.includes(mediaId) ? prev : [...prev, mediaId];
+      }
+      // Any other drop target removes from common
+      return prev.filter((id) => id !== mediaId);
+    });
   };
 
   const handleDragOver = (e: React.DragEvent, targetId: string) => {
@@ -299,6 +279,19 @@ export default function VariantImageAssignment() {
   };
 
   const handleDragLeave = () => setDragOverTarget(null);
+
+  // Compute drop index from mouse X position over a row of thumbnails
+  const computeDropIndex = (e: React.DragEvent, container: HTMLElement): number => {
+    const draggables = Array.from(container.querySelectorAll("[data-thumb]"));
+    if (draggables.length === 0) return 0;
+    const x = e.clientX;
+    for (let i = 0; i < draggables.length; i++) {
+      const rect = (draggables[i] as HTMLElement).getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      if (x < midX) return i;
+    }
+    return draggables.length;
+  };
 
   // Reusable thumbnail component
   const renderImage = (
@@ -312,6 +305,7 @@ export default function VariantImageAssignment() {
     return (
       <div
         key={`${source}-${mediaId}`}
+        data-thumb={mediaId}
         draggable
         onDragStart={(e) => handleDragStart(e, mediaId, source)}
         style={{
@@ -434,7 +428,10 @@ export default function VariantImageAssignment() {
                   <div
                     onDragOver={(e) => handleDragOver(e, v.id)}
                     onDragLeave={handleDragLeave}
-                    onDrop={(e) => handleDrop(e, v.id)}
+                    onDrop={(e) => {
+                      const idx = computeDropIndex(e, e.currentTarget as HTMLElement);
+                      handleDrop(e, v.id, idx);
+                    }}
                     style={variantRowStyle(v.id)}
                   >
                     {ids.length === 0 ? (
