@@ -1,6 +1,6 @@
 import { json } from "@remix-run/node";
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useNavigate } from "@remix-run/react";
+import { useLoaderData } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -8,13 +8,11 @@ import {
   Card,
   BlockStack,
   InlineStack,
-  Button,
   Badge,
   ResourceList,
   ResourceItem,
   Thumbnail,
   EmptyState,
-  Spinner,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -84,7 +82,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function VariantImages() {
   const { products } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
 
   const multiVariantProducts = products.filter(
     (p) => p.variants.edges.length > 1,
@@ -154,14 +151,9 @@ export default function VariantImages() {
                             </Badge>
                           </InlineStack>
                         </BlockStack>
-                        <Button
-                          onClick={() =>
-                            navigate(`/app/variant-images/${numericId}`)
-                          }
-                          variant="plain"
-                        >
-                          Configure
-                        </Button>
+                        <Text as="span" variant="bodyMd" tone="subdued">
+                          Configure →
+                        </Text>
                       </InlineStack>
                     </ResourceItem>
                   );

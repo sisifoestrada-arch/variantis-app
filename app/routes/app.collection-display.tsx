@@ -1,6 +1,6 @@
 import { json } from "@remix-run/node";
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useNavigate } from "@remix-run/react";
+import { useLoaderData } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -67,7 +67,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function CollectionDisplay() {
   const { collections, configMap } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
 
   return (
     <Page
@@ -127,14 +126,9 @@ export default function CollectionDisplay() {
                             )}
                           </InlineStack>
                         </BlockStack>
-                        <Button
-                          onClick={() =>
-                            navigate(`/app/collection-display/${numericId}`)
-                          }
-                          variant="plain"
-                        >
-                          Configure
-                        </Button>
+                        <Text as="span" variant="bodyMd" tone="subdued">
+                          Configure →
+                        </Text>
                       </InlineStack>
                     </ResourceItem>
                   );
