@@ -155,17 +155,59 @@
       });
     }
 
-    // Update title (multiple theme patterns)
-    const titleEl =
-      clone.querySelector(".card__heading a") ||
-      clone.querySelector(".card__heading") ||
-      clone.querySelector(".product-item__title") ||
-      clone.querySelector(".product-card__title") ||
-      clone.querySelector("h2 a") ||
-      clone.querySelector("h3 a") ||
-      clone.querySelector("h2") ||
-      clone.querySelector("h3");
-    if (titleEl) titleEl.textContent = buildTitle(variant, settings);
+    // Update title in EVERY element that displays the product name
+    // (Horizon has multiple: link, hidden, h3, details, etc.)
+    const newTitle = buildTitle(variant, settings);
+    const titleSelectors = [
+      ".card__heading a",
+      ".card__heading",
+      ".product-item__title",
+      ".product-card__title",
+      ".product-card__link",
+      ".visually-hidden",
+      ".product-grid-view-zoom-out--details",
+      "h2 a",
+      "h3 a",
+      "h4 a",
+      "h2",
+      "h3",
+      "h4",
+      ".contents.user-select-text",
+      "a.contents",
+    ];
+    const titleEls = new Set();
+    titleSelectors.forEach((sel) => {
+      clone.querySelectorAll(sel).forEach((el) => titleEls.add(el));
+    });
+    titleEls.forEach((el) => {
+      // Only update if it contains the original product title (avoid trashing nav/breadcrumbs)
+      if (el.textContent?.includes(variant.productTitle)) {
+        // Walk to find the deepest text-containing node we can safely replace
+        const textNodes = [];
+        const walk = (node) => {
+          for (const child of node.childNodes) {
+            if (child.nodeType === Node.TEXT_NODE && child.textContent?.trim()) {
+              textNodes.push(child);
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+              walk(child);
+            }
+          }
+        };
+        walk(el);
+        if (textNodes.length === 1) {
+          textNodes[0].textContent = newTitle;
+        } else if (textNodes.length === 0) {
+          el.textContent = newTitle;
+        } else {
+          // Multiple text nodes — only replace ones that match the product title
+          textNodes.forEach((tn) => {
+            if (tn.textContent?.trim() === variant.productTitle) {
+              tn.textContent = newTitle;
+            }
+          });
+        }
+      }
+    });
 
     // Update price
     const priceEls = clone.querySelectorAll(
