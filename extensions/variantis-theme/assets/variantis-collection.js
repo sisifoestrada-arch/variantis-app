@@ -110,18 +110,28 @@
       );
     });
 
-    // Update ALL images in the card (Horizon and many themes have a primary
-    // + a hover/secondary image swap). We replace both so hover doesn't show
-    // the unrelated base product photo.
+    // Build the list of images for this variant
+    // imageUrls = all images assigned to this variant (from Module A); fallback to single imageUrl
+    const variantImages =
+      Array.isArray(variant.imageUrls) && variant.imageUrls.length > 0
+        ? variant.imageUrls
+        : variant.imageUrl
+          ? [variant.imageUrl]
+          : [];
+
+    // Update each <img> in card order with successive variant images.
+    // Theme carousels usually have N img tags; we cycle through variantImages
+    // so each slot gets a different photo of this variant.
     const imgs = clone.querySelectorAll("img");
     imgs.forEach((imgEl, idx) => {
-      if (!variant.imageUrl) return;
-      // First image = primary; subsequent = hover/secondary
-      const isPrimary = idx === 0;
-      const targetUrl =
-        !isPrimary && variant.hoverImageUrl
-          ? variant.hoverImageUrl
-          : variant.imageUrl;
+      if (variantImages.length === 0) return;
+      // idx 0 = primary, idx 1 = hover/secondary, idx 2+ = additional carousel slots
+      let targetUrl;
+      if (idx === 1 && variant.hoverImageUrl) {
+        targetUrl = variant.hoverImageUrl;
+      } else {
+        targetUrl = variantImages[idx % variantImages.length];
+      }
       imgEl.src = targetUrl;
       if (imgEl.srcset) imgEl.srcset = targetUrl;
       imgEl.removeAttribute("data-src");
@@ -129,11 +139,21 @@
       imgEl.alt = buildTitle(variant, settings);
     });
 
-    // Also rewrite source elements inside <picture>
-    clone.querySelectorAll("source").forEach((src) => {
-      if (!variant.imageUrl) return;
-      src.srcset = variant.imageUrl;
+    // Rewrite <source> elements inside <picture> — match parent <img> by index
+    const pictures = clone.querySelectorAll("picture");
+    pictures.forEach((pic, picIdx) => {
+      const url = variantImages[picIdx % variantImages.length] || variantImages[0];
+      if (!url) return;
+      pic.querySelectorAll("source").forEach((src) => {
+        src.srcset = url;
+      });
     });
+    // Plain <source> not inside <picture>
+    if (pictures.length === 0) {
+      clone.querySelectorAll("source").forEach((src) => {
+        if (variantImages[0]) src.srcset = variantImages[0];
+      });
+    }
 
     // Update title (multiple theme patterns)
     const titleEl =

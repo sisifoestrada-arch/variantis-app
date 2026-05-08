@@ -31,6 +31,7 @@ interface VariantInfo {
   variantTitle: string;
   productTitle: string;
   imageUrl: string;
+  imageUrls: string[];
   price: string;
   availableForSale: boolean;
   optionValue: string;
@@ -66,6 +67,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
                   }
                 }
               }
+              media(first: 100) {
+                edges {
+                  node {
+                    id
+                    ... on MediaImage { image { url } }
+                    ... on Video { preview { image { url } } }
+                    ... on Model3d { preview { image { url } } }
+                  }
+                }
+              }
+              metafield(namespace: "variantis", key: "image_assignment") {
+                value
+              }
             }
           }
         }
@@ -87,16 +101,46 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     for (const option of product.options) {
       if (option.name !== "Title") optionNames.add(option.name);
     }
+
+    // Build mediaId → URL map for this product
+    const mediaUrlMap = new Map<string, string>();
+    for (const me of product.media?.edges ?? []) {
+      const node = me.node;
+      const url = node.image?.url ?? node.preview?.image?.url ?? "";
+      if (url) mediaUrlMap.set(node.id, url);
+    }
+
+    // Parse Module A's image_assignment metafield (mediaIds per variant)
+    let imageAssignment: Record<string, string[]> = {};
+    let commonImageIds: string[] = [];
+    if (product.metafield?.value) {
+      try {
+        const parsed = JSON.parse(product.metafield.value);
+        imageAssignment = parsed.assignment ?? {};
+        commonImageIds = parsed.commonImages ?? [];
+      } catch {}
+    }
+
     for (const ve of product.variants.edges) {
       const variant = ve.node;
       const firstOption = variant.selectedOptions[0];
+
+      // Resolve URLs from mediaIds for this variant (Module A assignment)
+      const assignedMediaIds = imageAssignment[variant.id] ?? [];
+      const variantUrls = [...assignedMediaIds, ...commonImageIds]
+        .map((id) => mediaUrlMap.get(id))
+        .filter((u): u is string => Boolean(u));
+
+      const primaryUrl = variantUrls[0] ?? variant.image?.url ?? "";
+
       allVariants.push({
         variantId: variant.id,
         productId: product.id,
         productHandle: product.handle,
         variantTitle: variant.title,
         productTitle: product.title,
-        imageUrl: variant.image?.url ?? "",
+        imageUrl: primaryUrl,
+        imageUrls: variantUrls.length > 0 ? variantUrls : (primaryUrl ? [primaryUrl] : []),
         price: variant.price,
         availableForSale: variant.availableForSale,
         optionValue: firstOption?.value ?? variant.title,
@@ -201,7 +245,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   `);
 
   // Build the storefront payload for THIS collection
-  type VariantConfig = { variantId: string; productId: string; productHandle: string; variantTitle: string; productTitle: string; imageUrl: string; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
+  type VariantConfig = { variantId: string; productId: string; productHandle: string; variantTitle: string; productTitle: string; imageUrl: string; imageUrls: string[]; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
   const variantList: VariantConfig[] = (variants as VariantPayload[]).map((v) => ({
     variantId: v.variantId,
     productId: v.productId,
@@ -209,6 +253,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     variantTitle: v.variantTitle,
     productTitle: v.productTitle,
     imageUrl: v.imageUrl,
+    imageUrls: v.imageUrls ?? (v.imageUrl ? [v.imageUrl] : []),
     hoverImageUrl: v.hoverImageUrl ?? "",
     price: v.price,
     availableForSale: v.availableForSale,
