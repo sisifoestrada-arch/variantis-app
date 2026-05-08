@@ -338,11 +338,26 @@ export default function VariantImageAssignment() {
                   gap: "12px",
                 }}
               >
-                {media.map((m) => {
+                {/* Sort: assigned first (in selection order), then common, then rest */}
+                {[...media]
+                  .sort((a, b) => {
+                    const aIdx = currentAssigned.indexOf(a.id);
+                    const bIdx = currentAssigned.indexOf(b.id);
+                    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+                    if (aIdx !== -1) return -1;
+                    if (bIdx !== -1) return 1;
+                    const aCommon = commonImages.includes(a.id);
+                    const bCommon = commonImages.includes(b.id);
+                    if (aCommon && !bCommon) return -1;
+                    if (!aCommon && bCommon) return 1;
+                    return 0;
+                  })
+                  .map((m) => {
                   const url = getMediaUrl(m);
                   if (!url) return null;
 
-                  const isAssigned = currentAssigned.includes(m.id);
+                  const assignedIdx = currentAssigned.indexOf(m.id);
+                  const isAssigned = assignedIdx !== -1;
                   const isCommon = commonImages.includes(m.id);
 
                   return (
@@ -391,17 +406,18 @@ export default function VariantImageAssignment() {
                               background: "#008060",
                               color: "white",
                               borderRadius: "999px",
-                              width: 28,
+                              minWidth: 28,
                               height: 28,
+                              padding: "0 8px",
                               display: "flex",
                               alignItems: "center",
                               justifyContent: "center",
-                              fontSize: 16,
+                              fontSize: 14,
                               fontWeight: "bold",
                               boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
                             }}
                           >
-                            ✓
+                            {assignedIdx + 1}
                           </div>
                         )}
                         {isCommon && (
