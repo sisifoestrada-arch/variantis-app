@@ -110,18 +110,30 @@
       );
     });
 
-    // Update image
-    const img = clone.querySelector("img");
-    if (img && variant.imageUrl) {
-      img.src = variant.imageUrl;
-      if (img.srcset) img.srcset = variant.imageUrl;
-      img.alt = buildTitle(variant, settings);
+    // Update ALL images in the card (Horizon and many themes have a primary
+    // + a hover/secondary image swap). We replace both so hover doesn't show
+    // the unrelated base product photo.
+    const imgs = clone.querySelectorAll("img");
+    imgs.forEach((imgEl, idx) => {
+      if (!variant.imageUrl) return;
+      // First image = primary; subsequent = hover/secondary
+      const isPrimary = idx === 0;
+      const targetUrl =
+        !isPrimary && variant.hoverImageUrl
+          ? variant.hoverImageUrl
+          : variant.imageUrl;
+      imgEl.src = targetUrl;
+      if (imgEl.srcset) imgEl.srcset = targetUrl;
+      imgEl.removeAttribute("data-src");
+      imgEl.removeAttribute("data-srcset");
+      imgEl.alt = buildTitle(variant, settings);
+    });
 
-      if (variant.hoverImageUrl) {
-        img.addEventListener("mouseenter", () => { img.src = variant.hoverImageUrl; });
-        img.addEventListener("mouseleave", () => { img.src = variant.imageUrl; });
-      }
-    }
+    // Also rewrite source elements inside <picture>
+    clone.querySelectorAll("source").forEach((src) => {
+      if (!variant.imageUrl) return;
+      src.srcset = variant.imageUrl;
+    });
 
     // Update title (multiple theme patterns)
     const titleEl =
