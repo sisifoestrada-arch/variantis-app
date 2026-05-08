@@ -1,10 +1,10 @@
 import { json } from "@remix-run/node";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useLoaderData, useFetcher } from "@remix-run/react";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useEffect } from "react";
+import type React from "react";
 import {
   Page,
-  Layout,
   Text,
   Card,
   BlockStack,
@@ -12,10 +12,7 @@ import {
   Button,
   Badge,
   Thumbnail,
-  Box,
   Banner,
-  Divider,
-  Checkbox,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -175,16 +172,14 @@ function getMediaUrl(m: MediaNode): string {
 }
 
 export default function VariantImageAssignment() {
-  const { product, variants, media, assignment: savedAssignment, commonImages: savedCommon, productId } =
+  const { product, variants, media, assignment: savedAssignment, commonImages: savedCommon } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
 
   const [assignment, setAssignment] = useState<ImageAssignment>(savedAssignment);
   const [commonImages, setCommonImages] = useState<CommonImages>(savedCommon);
-  const [activeVariant, setActiveVariant] = useState<string>(
-    variants[0]?.id ?? "",
-  );
+  const [dragOverTarget, setDragOverTarget] = useState<string | null>(null);
 
   const isSaving = fetcher.state !== "idle";
 
@@ -194,40 +189,6 @@ export default function VariantImageAssignment() {
     }
   }, [fetcher.state, fetcher.data, shopify]);
 
-  const toggleImageForVariant = useCallback(
-    (variantId: string, mediaId: string) => {
-      setAssignment((prev) => {
-        const current = prev[variantId] ?? [];
-        const next = current.includes(mediaId)
-          ? current.filter((id) => id !== mediaId)
-          : [...current, mediaId];
-        return { ...prev, [variantId]: next };
-      });
-    },
-    [],
-  );
-
-  const toggleCommonImage = useCallback((mediaId: string) => {
-    setCommonImages((prev) =>
-      prev.includes(mediaId) ? prev.filter((id) => id !== mediaId) : [...prev, mediaId],
-    );
-  }, []);
-
-  const moveImageInVariant = useCallback(
-    (variantId: string, mediaId: string, direction: -1 | 1) => {
-      setAssignment((prev) => {
-        const current = [...(prev[variantId] ?? [])];
-        const idx = current.indexOf(mediaId);
-        if (idx === -1) return prev;
-        const newIdx = idx + direction;
-        if (newIdx < 0 || newIdx >= current.length) return prev;
-        [current[idx], current[newIdx]] = [current[newIdx], current[idx]];
-        return { ...prev, [variantId]: current };
-      });
-    },
-    [],
-  );
-
   const save = () => {
     fetcher.submit(
       { assignment, commonImages } as unknown as Record<string, string>,
@@ -235,14 +196,194 @@ export default function VariantImageAssignment() {
     );
   };
 
-  const currentAssigned = assignment[activeVariant] ?? [];
-  const activeVariantData = variants.find((v) => v.id === activeVariant);
+  // Build mediaId → URL map
+  const mediaMap = new Map<string, string>();
+  media.forEach((m) => {
+    const url = getMediaUrl(m);
+    if (url) mediaMap.set(m.id, url);
+  });
+
+  // Compute unassigned media (not in any variant, not common)
+  const allAssignedIds = new Set<string>();
+  Object.values(assignment).forEach((ids) => ids.forEach((id) => allAssignedIds.add(id)));
+  commonImages.forEach((id) => allAssignedIds.add(id));
+  const unassignedMedia = media.filter((m) => !allAssignedIds.has(m.id));
+
+  // Drag-and-drop handlers
+  const handleDragStart = (
+    e: React.DragEvent,
+    mediaId: string,
+    source: string, // variantId | "common" | "pool"
+  ) => {
+    e.dataTransfer.setData("mediaId", mediaId);
+    e.dataTransfer.setData("source", source);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDrop = (
+    e: React.DragEvent,
+    targetVariantId: string, // variantId | "common" | "pool"
+    targetIndex?: number,
+  ) => {
+    e.preventDefault();
+    setDragOverTarget(null);
+    const mediaId = e.dataTransfer.getData("mediaId");
+    const source = e.dataTransfer.getData("source");
+    if (!mediaId) return;
+
+    setAssignment((prev) => {
+      const updated: ImageAssignment = { ...prev };
+
+      // Remove from source (if it's a variant)
+      if (source !== "pool" && source !== "common" && source !== targetVariantId) {
+        updated[source] = (updated[source] ?? []).filter((id) => id !== mediaId);
+      }
+
+      // Reorder within same variant
+      if (source === targetVariantId) {
+        const list = [...(updated[targetVariantId] ?? [])];
+        const fromIdx = list.indexOf(mediaId);
+        if (fromIdx !== -1) {
+          list.splice(fromIdx, 1);
+          const insertAt = targetIndex !== undefined ? Math.min(targetIndex, list.length) : list.length;
+          list.splice(insertAt, 0, mediaId);
+          updated[targetVariantId] = list;
+        }
+        return updated;
+      }
+
+      // Add to target variant
+      if (targetVariantId !== "common" && targetVariantId !== "pool") {
+        const list = [...(updated[targetVariantId] ?? [])];
+        if (!list.includes(mediaId)) {
+          const insertAt = targetIndex !== undefined ? Math.min(targetIndex, list.length) : list.length;
+          list.splice(insertAt, 0, mediaId);
+          updated[targetVariantId] = list;
+        }
+      }
+      return updated;
+    });
+
+    // Common drop zone
+    if (targetVariantId === "common") {
+      setCommonImages((prev) => (prev.includes(mediaId) ? prev : [...prev, mediaId]));
+      // Remove from all variants
+      setAssignment((prev) => {
+        const updated: ImageAssignment = {};
+        for (const k of Object.keys(prev)) {
+          updated[k] = (prev[k] ?? []).filter((id) => id !== mediaId);
+        }
+        return updated;
+      });
+    } else if (source === "common") {
+      setCommonImages((prev) => prev.filter((id) => id !== mediaId));
+    }
+
+    // Pool drop zone (drag back to pool removes from everywhere)
+    if (targetVariantId === "pool") {
+      setAssignment((prev) => {
+        const updated: ImageAssignment = {};
+        for (const k of Object.keys(prev)) {
+          updated[k] = (prev[k] ?? []).filter((id) => id !== mediaId);
+        }
+        return updated;
+      });
+      setCommonImages((prev) => prev.filter((id) => id !== mediaId));
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverTarget !== targetId) setDragOverTarget(targetId);
+  };
+
+  const handleDragLeave = () => setDragOverTarget(null);
+
+  // Reusable thumbnail component
+  const renderImage = (
+    mediaId: string,
+    source: string,
+    options: { size?: number; index?: number } = {},
+  ) => {
+    const url = mediaMap.get(mediaId);
+    if (!url) return null;
+    const size = options.size ?? 80;
+    return (
+      <div
+        key={`${source}-${mediaId}`}
+        draggable
+        onDragStart={(e) => handleDragStart(e, mediaId, source)}
+        style={{
+          position: "relative",
+          width: size,
+          height: size,
+          borderRadius: 8,
+          overflow: "hidden",
+          cursor: "grab",
+          border: "2px solid #e1e3e5",
+          flexShrink: 0,
+        }}
+      >
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+            pointerEvents: "none",
+          }}
+        />
+        {options.index !== undefined && (
+          <div
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 4,
+              background: "#008060",
+              color: "white",
+              borderRadius: "999px",
+              minWidth: 22,
+              height: 22,
+              padding: "0 6px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 12,
+              fontWeight: "bold",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+            }}
+          >
+            {options.index + 1}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const variantRowStyle = (variantId: string): React.CSSProperties => ({
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    minHeight: 96,
+    padding: 12,
+    borderRadius: 8,
+    border:
+      dragOverTarget === variantId
+        ? "2px dashed #008060"
+        : "2px dashed #d1d5db",
+    background: dragOverTarget === variantId ? "rgba(0,128,96,0.05)" : "#fafbfb",
+    transition: "all 0.15s",
+  });
 
   return (
     <Page
       backAction={{ content: "Variant Images", url: "/app/variant-images" }}
       title={product.title}
-      subtitle="Assign images to each variant"
+      subtitle="Drag and drop images to each variant"
       primaryAction={
         <Button variant="primary" onClick={save} loading={isSaving}>
           Save assignment
@@ -250,313 +391,131 @@ export default function VariantImageAssignment() {
       }
     >
       <TitleBar title={product.title} />
-      <Layout>
-        {/* Left: Variant selector */}
-        <Layout.Section variant="oneThird">
-          <Card>
-            <BlockStack gap="400">
+      <BlockStack gap="400">
+        <Banner tone="info">
+          <Text as="p" variant="bodyMd">
+            Drag images from the bottom pool into each variant. Drag within a
+            variant to reorder. Drag back to the pool to remove.
+          </Text>
+        </Banner>
+
+        {/* Variant rows */}
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">
+              Variants
+            </Text>
+            {variants.map((v) => {
+              const ids = assignment[v.id] ?? [];
+              return (
+                <BlockStack key={v.id} gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      {v.image?.url && (
+                        <Thumbnail
+                          source={v.image.url}
+                          alt={v.title}
+                          size="small"
+                        />
+                      )}
+                      <BlockStack gap="050">
+                        <Text as="h3" variant="bodyMd" fontWeight="bold">
+                          {v.title}
+                        </Text>
+                        {!v.availableForSale && (
+                          <Badge tone="attention">Sold out</Badge>
+                        )}
+                      </BlockStack>
+                    </InlineStack>
+                    <Badge tone={ids.length > 0 ? "success" : "new"}>
+                      {`${ids.length} images`}
+                    </Badge>
+                  </InlineStack>
+                  <div
+                    onDragOver={(e) => handleDragOver(e, v.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, v.id)}
+                    style={variantRowStyle(v.id)}
+                  >
+                    {ids.length === 0 ? (
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        Drop images here for {v.title}
+                      </Text>
+                    ) : (
+                      ids.map((mediaId, idx) =>
+                        renderImage(mediaId, v.id, { index: idx }),
+                      )
+                    )}
+                  </div>
+                </BlockStack>
+              );
+            })}
+          </BlockStack>
+        </Card>
+
+        {/* Common images row */}
+        <Card>
+          <BlockStack gap="200">
+            <BlockStack gap="050">
               <Text as="h2" variant="headingMd">
-                Variants
+                Common Images
               </Text>
-              <BlockStack gap="200">
-                {variants.map((v) => {
-                  const count = (assignment[v.id] ?? []).length;
-                  const isActive = v.id === activeVariant;
-                  return (
-                    <Box
-                      key={v.id}
-                      padding="300"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor={isActive ? "border-focus" : "border"}
-                      background={isActive ? "bg-surface-selected" : "bg-surface"}
-                    >
-                      <button
-                        onClick={() => setActiveVariant(v.id)}
-                        style={{
-                          all: "unset",
-                          cursor: "pointer",
-                          width: "100%",
-                          display: "block",
-                        }}
-                      >
-                        <InlineStack align="space-between" blockAlign="center">
-                          <InlineStack gap="200" blockAlign="center">
-                            {v.image?.url && (
-                              <Thumbnail
-                                source={v.image.url}
-                                alt={v.title}
-                                size="small"
-                              />
-                            )}
-                            <BlockStack gap="050">
-                              <Text as="span" variant="bodyMd" fontWeight={isActive ? "bold" : "regular"}>
-                                {v.title}
-                              </Text>
-                              {!v.availableForSale && (
-                                <Badge tone="attention">Sold out</Badge>
-                              )}
-                            </BlockStack>
-                          </InlineStack>
-                          <Badge tone={count > 0 ? "success" : "new"}>
-                            {count > 0 ? `${count} images` : "0"}
-                          </Badge>
-                        </InlineStack>
-                      </button>
-                    </Box>
-                  );
-                })}
-              </BlockStack>
+              <Text as="p" variant="bodySm" tone="subdued">
+                These images appear on ALL variants (size charts, lifestyle photos).
+              </Text>
+            </BlockStack>
+            <div
+              onDragOver={(e) => handleDragOver(e, "common")}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, "common")}
+              style={variantRowStyle("common")}
+            >
+              {commonImages.length === 0 ? (
+                <Text as="span" variant="bodySm" tone="subdued">
+                  Drop images here that should show on all variants
+                </Text>
+              ) : (
+                commonImages.map((mediaId) => renderImage(mediaId, "common"))
+              )}
+            </div>
+          </BlockStack>
+        </Card>
 
-              <Divider />
-
-              <BlockStack gap="200">
-                <Text as="h3" variant="headingMd">
-                  Common Images
+        {/* Pool of unassigned images */}
+        <Card>
+          <BlockStack gap="200">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="050">
+                <Text as="h2" variant="headingMd">
+                  Unassigned images
                 </Text>
                 <Text as="p" variant="bodySm" tone="subdued">
-                  These images appear across ALL variants (e.g. size charts).
+                  Drag from here into any variant. Drop here to remove.
                 </Text>
               </BlockStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        {/* Right: Image grid */}
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="050">
-                  <Text as="h2" variant="headingMd">
-                    {activeVariantData
-                      ? `Images for: ${activeVariantData.title}`
-                      : "Select a variant"}
-                  </Text>
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    Click an image to assign it to this variant
-                  </Text>
-                </BlockStack>
-                <Badge tone="info">{`${currentAssigned.length} selected`}</Badge>
-              </InlineStack>
-
-              <Banner tone="info">
-                <Text as="p" variant="bodyMd">
-                  Check the <Text as="span" fontWeight="bold">Common</Text> box to show an image on all variants (useful for size charts or lifestyle photos).
+              <Badge tone="info">{`${unassignedMedia.length} images`}</Badge>
+            </InlineStack>
+            <div
+              onDragOver={(e) => handleDragOver(e, "pool")}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, "pool")}
+              style={{
+                ...variantRowStyle("pool"),
+                background: dragOverTarget === "pool" ? "rgba(220,53,69,0.05)" : "#fafbfb",
+                borderColor: dragOverTarget === "pool" ? "#dc3545" : "#d1d5db",
+              }}
+            >
+              {unassignedMedia.length === 0 ? (
+                <Text as="span" variant="bodySm" tone="subdued">
+                  All images assigned. Upload more in the product editor.
                 </Text>
-              </Banner>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-                  gap: "12px",
-                }}
-              >
-                {/* Sort: assigned first (in selection order), then common, then rest */}
-                {[...media]
-                  .sort((a, b) => {
-                    const aIdx = currentAssigned.indexOf(a.id);
-                    const bIdx = currentAssigned.indexOf(b.id);
-                    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-                    if (aIdx !== -1) return -1;
-                    if (bIdx !== -1) return 1;
-                    const aCommon = commonImages.includes(a.id);
-                    const bCommon = commonImages.includes(b.id);
-                    if (aCommon && !bCommon) return -1;
-                    if (!aCommon && bCommon) return 1;
-                    return 0;
-                  })
-                  .map((m) => {
-                  const url = getMediaUrl(m);
-                  if (!url) return null;
-
-                  const assignedIdx = currentAssigned.indexOf(m.id);
-                  const isAssigned = assignedIdx !== -1;
-                  const isCommon = commonImages.includes(m.id);
-
-                  return (
-                    <BlockStack key={m.id} gap="100">
-                      <div
-                        onClick={() => {
-                          if (isCommon) {
-                            // unmark as common, then user can assign per-variant
-                            toggleCommonImage(m.id);
-                            return;
-                          }
-                          toggleImageForVariant(activeVariant, m.id);
-                        }}
-                        style={{
-                          position: "relative",
-                          cursor: "pointer",
-                          border: isAssigned
-                            ? "4px solid #008060"
-                            : isCommon
-                              ? "4px solid #2c6ecb"
-                              : "2px solid #e1e3e5",
-                          borderRadius: "8px",
-                          overflow: "hidden",
-                          transition: "border-color 0.15s",
-                          boxShadow: isAssigned
-                            ? "0 0 0 2px rgba(0, 128, 96, 0.25)"
-                            : "none",
-                        }}
-                      >
-                        <img
-                          src={url}
-                          alt=""
-                          style={{
-                            width: "100%",
-                            aspectRatio: "1",
-                            objectFit: "cover",
-                            display: "block",
-                          }}
-                        />
-                        {isAssigned && (
-                          <>
-                            <div
-                              style={{
-                                position: "absolute",
-                                top: 6,
-                                right: 6,
-                                background: "#008060",
-                                color: "white",
-                                borderRadius: "999px",
-                                minWidth: 28,
-                                height: 28,
-                                padding: "0 8px",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontSize: 14,
-                                fontWeight: "bold",
-                                boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
-                              }}
-                            >
-                              {assignedIdx + 1}
-                            </div>
-                            <div
-                              onClick={(e) => e.stopPropagation()}
-                              style={{
-                                position: "absolute",
-                                top: 6,
-                                left: 6,
-                                display: "flex",
-                                gap: 4,
-                              }}
-                            >
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  moveImageInVariant(activeVariant, m.id, -1);
-                                }}
-                                disabled={assignedIdx === 0}
-                                style={{
-                                  width: 24,
-                                  height: 24,
-                                  borderRadius: 4,
-                                  border: "none",
-                                  background: "rgba(0,0,0,0.7)",
-                                  color: "white",
-                                  cursor: assignedIdx === 0 ? "not-allowed" : "pointer",
-                                  opacity: assignedIdx === 0 ? 0.4 : 1,
-                                  fontSize: 14,
-                                  fontWeight: "bold",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                }}
-                                title="Move earlier"
-                              >
-                                ←
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  moveImageInVariant(activeVariant, m.id, 1);
-                                }}
-                                disabled={assignedIdx === currentAssigned.length - 1}
-                                style={{
-                                  width: 24,
-                                  height: 24,
-                                  borderRadius: 4,
-                                  border: "none",
-                                  background: "rgba(0,0,0,0.7)",
-                                  color: "white",
-                                  cursor:
-                                    assignedIdx === currentAssigned.length - 1
-                                      ? "not-allowed"
-                                      : "pointer",
-                                  opacity:
-                                    assignedIdx === currentAssigned.length - 1 ? 0.4 : 1,
-                                  fontSize: 14,
-                                  fontWeight: "bold",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                }}
-                                title="Move later"
-                              >
-                                →
-                              </button>
-                            </div>
-                          </>
-                        )}
-                        {isCommon && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: 6,
-                              right: 6,
-                              background: "#2c6ecb",
-                              color: "white",
-                              borderRadius: "4px",
-                              padding: "2px 8px",
-                              fontSize: 11,
-                              fontWeight: "bold",
-                              boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
-                            }}
-                          >
-                            COMMON
-                          </div>
-                        )}
-                      </div>
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <Checkbox
-                          label="Common"
-                          checked={isCommon}
-                          onChange={() => {
-                            toggleCommonImage(m.id);
-                            if (!isCommon) {
-                              // becoming common: remove from all per-variant lists
-                              setAssignment((prev) => {
-                                const updated = { ...prev };
-                                Object.keys(updated).forEach((vid) => {
-                                  updated[vid] = (updated[vid] ?? []).filter(
-                                    (id) => id !== m.id,
-                                  );
-                                });
-                                return updated;
-                              });
-                            }
-                          }}
-                        />
-                      </div>
-                    </BlockStack>
-                  );
-                })}
-              </div>
-
-              {media.length === 0 && (
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  No images found for this product. Upload images in the
-                  product editor first.
-                </Text>
+              ) : (
+                unassignedMedia.map((m) => renderImage(m.id, "pool"))
               )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-      </Layout>
+            </div>
+          </BlockStack>
+        </Card>
+      </BlockStack>
     </Page>
   );
 }
