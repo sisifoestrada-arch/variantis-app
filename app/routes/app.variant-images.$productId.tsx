@@ -348,20 +348,28 @@ export default function VariantImageAssignment() {
                   return (
                     <BlockStack key={m.id} gap="100">
                       <div
-                        onClick={() =>
-                          !isCommon && toggleImageForVariant(activeVariant, m.id)
-                        }
+                        onClick={() => {
+                          if (isCommon) {
+                            // unmark as common, then user can assign per-variant
+                            toggleCommonImage(m.id);
+                            return;
+                          }
+                          toggleImageForVariant(activeVariant, m.id);
+                        }}
                         style={{
-                          cursor: isCommon ? "default" : "pointer",
+                          position: "relative",
+                          cursor: "pointer",
                           border: isAssigned
-                            ? "3px solid #008060"
+                            ? "4px solid #008060"
                             : isCommon
-                              ? "3px solid #2c6ecb"
-                              : "3px solid #e1e3e5",
+                              ? "4px solid #2c6ecb"
+                              : "2px solid #e1e3e5",
                           borderRadius: "8px",
                           overflow: "hidden",
-                          opacity: isCommon ? 0.7 : 1,
-                          transition: "border-color 0.15s, opacity 0.15s",
+                          transition: "border-color 0.15s",
+                          boxShadow: isAssigned
+                            ? "0 0 0 2px rgba(0, 128, 96, 0.25)"
+                            : "none",
                         }}
                       >
                         <img
@@ -374,26 +382,68 @@ export default function VariantImageAssignment() {
                             display: "block",
                           }}
                         />
+                        {isAssigned && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 6,
+                              right: 6,
+                              background: "#008060",
+                              color: "white",
+                              borderRadius: "999px",
+                              width: 28,
+                              height: 28,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 16,
+                              fontWeight: "bold",
+                              boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                            }}
+                          >
+                            ✓
+                          </div>
+                        )}
+                        {isCommon && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 6,
+                              right: 6,
+                              background: "#2c6ecb",
+                              color: "white",
+                              borderRadius: "4px",
+                              padding: "2px 8px",
+                              fontSize: 11,
+                              fontWeight: "bold",
+                              boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                            }}
+                          >
+                            COMMON
+                          </div>
+                        )}
                       </div>
-                      <Checkbox
-                        label="Common"
-                        checked={isCommon}
-                        onChange={() => {
-                          toggleCommonImage(m.id);
-                          if (!isCommon) {
-                            // remove from variant-specific if marking as common
-                            setAssignment((prev) => {
-                              const updated = { ...prev };
-                              Object.keys(updated).forEach((vid) => {
-                                updated[vid] = (updated[vid] ?? []).filter(
-                                  (id) => id !== m.id,
-                                );
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          label="Common"
+                          checked={isCommon}
+                          onChange={() => {
+                            toggleCommonImage(m.id);
+                            if (!isCommon) {
+                              // becoming common: remove from all per-variant lists
+                              setAssignment((prev) => {
+                                const updated = { ...prev };
+                                Object.keys(updated).forEach((vid) => {
+                                  updated[vid] = (updated[vid] ?? []).filter(
+                                    (id) => id !== m.id,
+                                  );
+                                });
+                                return updated;
                               });
-                              return updated;
-                            });
-                          }
-                        }}
-                      />
+                            }
+                          }}
+                        />
+                      </div>
                     </BlockStack>
                   );
                 })}
