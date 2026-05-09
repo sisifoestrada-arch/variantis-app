@@ -26,10 +26,7 @@ import db from "../db.server";
 
 interface VariantInfo {
   variantId: string;
-  productId: string;
-  productHandle: string;
   variantTitle: string;
-  productTitle: string;
   imageUrl: string;
   imageUrls: string[];
   price: string;
@@ -37,144 +34,132 @@ interface VariantInfo {
   optionValue: string;
 }
 
-export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
-  const collectionId = `gid://shopify/Collection/${params.collectionId}`;
-
-  const response = await admin.graphql(`
-    #graphql
-    query getCollectionVariants($id: ID!) {
-      collection(id: $id) {
-        id
-        title
-        handle
-        products(first: 50) {
-          edges {
-            node {
-              id
-              title
-              handle
-              options { name values }
-              variants(first: 20) {
-                edges {
-                  node {
-                    id
-                    title
-                    price
-                    availableForSale
-                    selectedOptions { name value }
-                    image { url }
-                  }
-                }
-              }
-              media(first: 100) {
-                edges {
-                  node {
-                    id
-                    ... on MediaImage { image { url } }
-                    ... on Video { preview { image { url } } }
-                    ... on Model3d { preview { image { url } } }
-                  }
-                }
-              }
-              metafield(namespace: "variantis", key: "image_assignment") {
-                value
-              }
-            }
+const PRODUCT_QUERY = `#graphql
+  query getProductForDisplay($id: ID!) {
+    product(id: $id) {
+      id
+      title
+      handle
+      options { name values }
+      variants(first: 100) {
+        edges {
+          node {
+            id
+            title
+            price
+            availableForSale
+            selectedOptions { name value }
+            image { url }
           }
         }
       }
-    }
-  `, { variables: { id: collectionId } });
-
-  const data = await response.json();
-  const collection = data.data.collection;
-
-  if (!collection) throw new Response("Collection not found", { status: 404 });
-
-  // Build flat list of all variants in this collection
-  const allVariants: VariantInfo[] = [];
-  const optionNames = new Set<string>();
-
-  for (const pe of collection.products.edges) {
-    const product = pe.node;
-    for (const option of product.options) {
-      if (option.name !== "Title") optionNames.add(option.name);
-    }
-
-    // Build mediaId → URL map for this product
-    const mediaUrlMap = new Map<string, string>();
-    for (const me of product.media?.edges ?? []) {
-      const node = me.node;
-      const url = node.image?.url ?? node.preview?.image?.url ?? "";
-      if (url) mediaUrlMap.set(node.id, url);
-    }
-
-    // Parse Module A's image_assignment metafield (mediaIds per variant)
-    let imageAssignment: Record<string, string[]> = {};
-    let commonImageIds: string[] = [];
-    if (product.metafield?.value) {
-      try {
-        const parsed = JSON.parse(product.metafield.value);
-        imageAssignment = parsed.assignment ?? {};
-        commonImageIds = parsed.commonImages ?? [];
-      } catch {}
-    }
-
-    for (const ve of product.variants.edges) {
-      const variant = ve.node;
-      const firstOption = variant.selectedOptions[0];
-
-      // Module A: variant-specific assigned images, in user-defined order (#1, #2, #3...)
-      const assignedMediaIds = imageAssignment[variant.id] ?? [];
-      const assignedUrls = assignedMediaIds
-        .map((id) => mediaUrlMap.get(id))
-        .filter((u): u is string => Boolean(u));
-
-      const commonUrls = commonImageIds
-        .map((id) => mediaUrlMap.get(id))
-        .filter((u): u is string => Boolean(u));
-
-      // Build final list with deduplication, RESPECTING user-defined order:
-      //   1. Assigned images in admin selection order (#1, #2, #3...)
-      //   2. Common images
-      //   3. Shopify variant.image as last-resort fallback only if nothing else
-      const seen = new Set<string>();
-      const finalUrls: string[] = [];
-      const pushUnique = (u: string | undefined | null) => {
-        if (!u || seen.has(u)) return;
-        seen.add(u);
-        finalUrls.push(u);
-      };
-
-      assignedUrls.forEach(pushUnique);
-      commonUrls.forEach(pushUnique);
-
-      // Fallback: only use Shopify's default variant image if user assigned nothing
-      if (finalUrls.length === 0 && variant.image?.url) {
-        pushUnique(variant.image.url);
+      media(first: 100) {
+        edges {
+          node {
+            id
+            ... on MediaImage { image { url } }
+            ... on Video { preview { image { url } } }
+            ... on Model3d { preview { image { url } } }
+          }
+        }
       }
-
-      const primaryUrl = finalUrls[0] ?? "";
-
-      allVariants.push({
-        variantId: variant.id,
-        productId: product.id,
-        productHandle: product.handle,
-        variantTitle: variant.title,
-        productTitle: product.title,
-        imageUrl: primaryUrl,
-        imageUrls: finalUrls,
-        price: variant.price,
-        availableForSale: variant.availableForSale,
-        optionValue: firstOption?.value ?? variant.title,
-      });
+      metafield(namespace: "variantis", key: "image_assignment") {
+        value
+      }
     }
   }
+`;
 
-  // Load saved config
-  const config = await db.collectionConfig.findUnique({
-    where: { shop_collectionId: { shop: session.shop, collectionId: collection.id } },
+interface MediaEdge { node: { id: string; image?: { url: string }; preview?: { image?: { url: string } } } }
+interface VariantEdge {
+  node: {
+    id: string;
+    title: string;
+    price: string;
+    availableForSale: boolean;
+    selectedOptions: Array<{ name: string; value: string }>;
+    image: { url: string } | null;
+  };
+}
+interface FullProductNode {
+  id: string;
+  title: string;
+  handle: string;
+  options: Array<{ name: string; values: string[] }>;
+  variants: { edges: VariantEdge[] };
+  media: { edges: MediaEdge[] };
+  metafield: { value: string } | null;
+}
+
+// Resolve variant→imageUrls[] from product media + image_assignment metafield
+function buildVariantInfos(product: FullProductNode): { variants: VariantInfo[]; optionNames: string[] } {
+  const optionNames: string[] = [];
+  for (const option of product.options) {
+    if (option.name !== "Title") optionNames.push(option.name);
+  }
+
+  const mediaUrlMap = new Map<string, string>();
+  for (const me of product.media.edges) {
+    const url = me.node.image?.url ?? me.node.preview?.image?.url ?? "";
+    if (url) mediaUrlMap.set(me.node.id, url);
+  }
+
+  let imageAssignment: Record<string, string[]> = {};
+  let commonImageIds: string[] = [];
+  if (product.metafield?.value) {
+    try {
+      const parsed = JSON.parse(product.metafield.value);
+      imageAssignment = parsed.assignment ?? {};
+      commonImageIds = parsed.commonImages ?? [];
+    } catch {}
+  }
+
+  const variants: VariantInfo[] = [];
+  for (const ve of product.variants.edges) {
+    const v = ve.node;
+    const firstOption = v.selectedOptions[0];
+
+    const assignedIds = imageAssignment[v.id] ?? [];
+    const seen = new Set<string>();
+    const finalUrls: string[] = [];
+    const pushUnique = (u: string | undefined | null) => {
+      if (!u || seen.has(u)) return;
+      seen.add(u);
+      finalUrls.push(u);
+    };
+    assignedIds.map((id) => mediaUrlMap.get(id)).forEach(pushUnique);
+    commonImageIds.map((id) => mediaUrlMap.get(id)).forEach(pushUnique);
+    if (finalUrls.length === 0 && v.image?.url) pushUnique(v.image.url);
+
+    variants.push({
+      variantId: v.id,
+      variantTitle: v.title,
+      imageUrl: finalUrls[0] ?? "",
+      imageUrls: finalUrls,
+      price: v.price,
+      availableForSale: v.availableForSale,
+      optionValue: firstOption?.value ?? v.title,
+    });
+  }
+
+  return { variants, optionNames };
+}
+
+export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const productId = `gid://shopify/Product/${params.productId}`;
+
+  const response = await admin.graphql(PRODUCT_QUERY, { variables: { id: productId } });
+  const data = await response.json();
+  const product: FullProductNode | null = data.data.product;
+
+  if (!product) throw new Response("Product not found", { status: 404 });
+
+  const { variants, optionNames } = buildVariantInfos(product);
+
+  // Load existing config from DB
+  const config = await db.productConfig.findUnique({
+    where: { shop_productId: { shop: session.shop, productId: product.id } },
     include: { variants: true },
   });
 
@@ -183,47 +168,46 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   );
 
   return json({
-    collection,
-    allVariants,
-    optionNames: Array.from(optionNames),
+    product: { id: product.id, title: product.title, handle: product.handle },
+    variants,
+    optionNames,
     config,
     savedVariants,
-    collectionGid: collection.id,
-    shop: session.shop,
   });
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  const collectionId = `gid://shopify/Collection/${params.collectionId}`;
+  const productId = `gid://shopify/Product/${params.productId}`;
   const body = await request.json();
 
   const {
     enabled, splitByOption, hideOutOfStock, showOnlyDiscount,
     hideWithoutImage, titleFormat, customTitleFormat, variants,
-    collectionTitle,
+    productTitle, productHandle,
   } = body;
 
-  await db.collectionConfig.upsert({
-    where: { shop_collectionId: { shop: session.shop, collectionId } },
+  // Upsert ProductConfig + variants
+  await db.productConfig.upsert({
+    where: { shop_productId: { shop: session.shop, productId } },
     update: {
       enabled, splitByOption, hideOutOfStock, showOnlyDiscount,
-      hideWithoutImage, titleFormat, customTitleFormat, collectionTitle, updatedAt: new Date(),
+      hideWithoutImage, titleFormat, customTitleFormat,
+      productTitle, productHandle, updatedAt: new Date(),
     },
     create: {
-      shop: session.shop, collectionId, collectionTitle,
+      shop: session.shop, productId, productTitle, productHandle,
       enabled, splitByOption, hideOutOfStock, showOnlyDiscount,
       hideWithoutImage, titleFormat, customTitleFormat,
     },
   });
 
   type VariantPayload = VariantInfo & { visible: boolean; position: number; hoverImageUrl: string };
-  // Upsert each variant config
   for (const v of variants as VariantPayload[]) {
-    await db.variantCollectionConfig.upsert({
+    await db.productVariantConfig.upsert({
       where: {
-        shop_collectionId_variantId: {
-          shop: session.shop, collectionId, variantId: v.variantId,
+        shop_productId_variantId: {
+          shop: session.shop, productId, variantId: v.variantId,
         },
       },
       update: {
@@ -231,30 +215,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         hoverImageUrl: v.hoverImageUrl ?? "", updatedAt: new Date(),
       },
       create: {
-        shop: session.shop, collectionId, variantId: v.variantId,
-        productId: v.productId, variantTitle: v.variantTitle,
+        shop: session.shop, productId, variantId: v.variantId,
+        variantTitle: v.variantTitle,
         imageUrl: v.imageUrl, hoverImageUrl: v.hoverImageUrl ?? "",
         visible: v.visible, position: v.position,
       },
     });
   }
 
-  // Ensure metafield definitions exist (collection-level + shop-level)
+  // Ensure metafield definition with storefront access
   await admin.graphql(`
     #graphql
-    mutation EnsureMetafieldDefinitions {
-      collectionDef: metafieldDefinitionCreate(definition: {
-        name: "Variantis Display Config",
-        namespace: "variantis",
-        key: "display_config",
-        type: "json",
-        ownerType: COLLECTION,
-        access: { storefront: PUBLIC_READ }
-      }) {
-        createdDefinition { id }
-        userErrors { field message code }
-      }
-      shopDef: metafieldDefinitionCreate(definition: {
+    mutation EnsureShopMetafieldDef {
+      metafieldDefinitionCreate(definition: {
         name: "Variantis All Configs",
         namespace: "variantis",
         key: "all_configs",
@@ -268,52 +241,94 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   `);
 
-  // Build the storefront payload for THIS collection
-  type VariantConfig = { variantId: string; productId: string; productHandle: string; variantTitle: string; productTitle: string; imageUrl: string; imageUrls: string[]; hoverImageUrl: string; price: string; availableForSale: boolean; optionValue: string; visible: boolean; position: number };
-  const variantList: VariantConfig[] = (variants as VariantPayload[]).map((v) => ({
-    variantId: v.variantId,
-    productId: v.productId,
-    productHandle: v.productHandle,
-    variantTitle: v.variantTitle,
-    productTitle: v.productTitle,
-    imageUrl: v.imageUrl,
-    imageUrls: v.imageUrls ?? (v.imageUrl ? [v.imageUrl] : []),
-    hoverImageUrl: v.hoverImageUrl ?? "",
-    price: v.price,
-    availableForSale: v.availableForSale,
-    optionValue: v.optionValue,
-    visible: v.visible,
-    position: v.position,
-  }));
-
-  const storefrontConfig = {
-    collectionId,
-    enabled,
-    splitByOption,
-    hideOutOfStock,
-    showOnlyDiscount,
-    hideWithoutImage,
-    titleFormat,
-    customTitleFormat,
-    variants: variantList,
-  };
-
-  // Build the GLOBAL config: aggregate variants from ALL configured collections
-  // so homepage / search / arbitrary product cards all benefit
-  const allConfigs = await db.collectionConfig.findMany({
+  // Build the global shop metafield by aggregating ALL configured products
+  const allConfigs = await db.productConfig.findMany({
     where: { shop: session.shop },
     include: { variants: true },
   });
 
-  // Map productHandle → unified variant entry (deduplicate across collections)
-  const handleToVariants = new Map<string, VariantConfig[]>();
-  // Include the current save first (most up-to-date data)
-  for (const v of variantList) {
-    if (!v.productHandle) continue;
-    if (!handleToVariants.has(v.productHandle)) handleToVariants.set(v.productHandle, []);
-    handleToVariants.get(v.productHandle)!.push(v);
+  // Bulk-load all products to resolve images per variant (single GraphQL call)
+  const productGids = allConfigs.map((c) => c.productId);
+  type VariantConfigOut = VariantInfo & {
+    productId: string;
+    productHandle: string;
+    productTitle: string;
+    hoverImageUrl: string;
+    visible: boolean;
+    position: number;
+  };
+  const productHandles: Record<string, VariantConfigOut[]> = {};
+
+  if (productGids.length > 0) {
+    const bulkRes = await admin.graphql(`
+      #graphql
+      query BulkProducts($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on Product {
+            id
+            title
+            handle
+            options { name values }
+            variants(first: 100) {
+              edges {
+                node {
+                  id title price availableForSale
+                  selectedOptions { name value }
+                  image { url }
+                }
+              }
+            }
+            media(first: 100) {
+              edges {
+                node {
+                  id
+                  ... on MediaImage { image { url } }
+                  ... on Video { preview { image { url } } }
+                  ... on Model3d { preview { image { url } } }
+                }
+              }
+            }
+            metafield(namespace: "variantis", key: "image_assignment") {
+              value
+            }
+          }
+        }
+      }
+    `, { variables: { ids: productGids } });
+    const bulkData = await bulkRes.json();
+    const productsArr: FullProductNode[] = (bulkData.data.nodes ?? []).filter(Boolean);
+
+    const productById = new Map(productsArr.map((p) => [p.id, p]));
+
+    for (const cfg of allConfigs) {
+      const product = productById.get(cfg.productId);
+      if (!product) continue;
+      const { variants: variantInfos } = buildVariantInfos(product);
+      const savedMap = new Map(cfg.variants.map((v) => [v.variantId, v]));
+
+      const list: VariantConfigOut[] = variantInfos.map((vi, idx) => {
+        const saved = savedMap.get(vi.variantId);
+        return {
+          ...vi,
+          productId: product.id,
+          productHandle: product.handle,
+          productTitle: product.title,
+          hoverImageUrl: saved?.hoverImageUrl ?? "",
+          visible: saved?.visible ?? true,
+          position: saved?.position ?? idx,
+        };
+      });
+
+      // Filter out invisible & sort by position before publishing
+      const sorted = list
+        .filter((v) => v.visible !== false)
+        .sort((a, b) => (a.position || 0) - (b.position || 0));
+
+      productHandles[product.handle] = sorted;
+    }
   }
 
+  // Use current product's settings as global defaults (storefront JS reads top-level)
   const globalConfig = {
     enabled,
     splitByOption,
@@ -322,36 +337,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     hideWithoutImage,
     titleFormat,
     customTitleFormat,
-    // Map of productHandle → array of variant entries
-    productHandles: Object.fromEntries(handleToVariants),
-    // Per-collection settings keyed by collection GID
-    collections: Object.fromEntries(
-      allConfigs.map((c) => [
-        c.collectionId,
-        {
-          enabled: c.enabled,
-          splitByOption: c.splitByOption,
-          hideOutOfStock: c.hideOutOfStock,
-          showOnlyDiscount: c.showOnlyDiscount,
-          hideWithoutImage: c.hideWithoutImage,
-          titleFormat: c.titleFormat,
-          customTitleFormat: c.customTitleFormat,
-        },
-      ]),
-    ),
+    productHandles,
   };
 
-  // Get the actual shop GID
-  const shopRes = await admin.graphql(`#graphql
-    query { shop { id } }
-  `);
+  // Get shop GID
+  const shopRes = await admin.graphql(`#graphql query { shop { id } }`);
   const shopData = await shopRes.json();
   const shopGid = shopData.data.shop.id;
 
-  // Write metafields: collection-specific + shop-level global
   await admin.graphql(`
     #graphql
-    mutation SetMetafields($metafields: [MetafieldsSetInput!]!) {
+    mutation SetShopMetafield($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields { id key namespace value }
         userErrors { field message }
@@ -359,31 +355,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   `, {
     variables: {
-      metafields: [
-        {
-          ownerId: collectionId,
-          namespace: "variantis",
-          key: "display_config",
-          value: JSON.stringify(storefrontConfig),
-          type: "json",
-        },
-        {
-          ownerId: shopGid,
-          namespace: "variantis",
-          key: "all_configs",
-          value: JSON.stringify(globalConfig),
-          type: "json",
-        },
-      ],
+      metafields: [{
+        ownerId: shopGid,
+        namespace: "variantis",
+        key: "all_configs",
+        value: JSON.stringify(globalConfig),
+        type: "json",
+      }],
     },
   });
 
   return json({ ok: true });
 };
 
-export default function CollectionDisplayConfig() {
+export default function ProductDisplayConfig() {
   const {
-    collection, allVariants, optionNames, config, savedVariants,
+    product, variants, optionNames, config, savedVariants,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
@@ -401,7 +388,7 @@ export default function CollectionDisplayConfig() {
     Record<string, { visible: boolean; position: number; hoverImageUrl: string }>
   >(
     Object.fromEntries(
-      allVariants.map((v, i) => [
+      variants.map((v, i) => [
         v.variantId,
         {
           visible: savedVariants[v.variantId]?.visible ?? true,
@@ -416,12 +403,12 @@ export default function CollectionDisplayConfig() {
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.ok) {
-      shopify.toast.show("Collection display saved");
+      shopify.toast.show("Product display saved");
     }
   }, [fetcher.state, fetcher.data, shopify]);
 
   const save = () => {
-    const variantsPayload = allVariants.map((v) => ({
+    const variantsPayload = variants.map((v) => ({
       ...v,
       ...(variantConfigs[v.variantId] ?? { visible: true, position: 0, hoverImageUrl: "" }),
     }));
@@ -430,7 +417,8 @@ export default function CollectionDisplayConfig() {
       {
         enabled, splitByOption, hideOutOfStock, showOnlyDiscount,
         hideWithoutImage, titleFormat, customTitleFormat,
-        collectionTitle: collection.title,
+        productTitle: product.title,
+        productHandle: product.handle,
         variants: variantsPayload,
       } as unknown as Record<string, string>,
       { method: "POST", encType: "application/json" },
@@ -445,18 +433,17 @@ export default function CollectionDisplayConfig() {
   return (
     <Page
       backAction={{ content: "Collection Display", url: "/app/collection-display" }}
-      title={collection.title}
-      subtitle="Configure variant display for this collection"
+      title={product.title}
+      subtitle="Configure how this product's variants appear as separate cards"
       primaryAction={
         <Button variant="primary" onClick={save} loading={isSaving}>
           Save settings
         </Button>
       }
     >
-      <TitleBar title={collection.title} />
+      <TitleBar title={product.title} />
       <Layout>
         <Layout.Section>
-          {/* Main settings */}
           <Card>
             <BlockStack gap="400">
               <InlineStack align="space-between">
@@ -467,7 +454,7 @@ export default function CollectionDisplayConfig() {
               </InlineStack>
 
               <Checkbox
-                label="Enable variant display for this collection"
+                label="Enable variant cards for this product"
                 checked={enabled}
                 onChange={setEnabled}
               />
@@ -548,7 +535,6 @@ export default function CollectionDisplayConfig() {
             </BlockStack>
           </Card>
 
-          {/* Variant list */}
           {enabled && (
             <Box paddingBlockStart="400">
               <Card>
@@ -558,17 +544,16 @@ export default function CollectionDisplayConfig() {
                       Variant Visibility
                     </Text>
                     <Text as="p" variant="bodySm" tone="subdued">
-                      {allVariants.length} variants in this collection
+                      {variants.length} variants
                     </Text>
                   </InlineStack>
 
                   <Banner tone="info">
-                    Toggle individual variants to show or hide them in this
-                    collection.
+                    Toggle individual variants to show or hide them as cards.
                   </Banner>
 
                   <BlockStack gap="300">
-                    {allVariants.map((v) => {
+                    {variants.map((v) => {
                       const vc = variantConfigs[v.variantId] ?? {
                         visible: true, position: 0, hoverImageUrl: "",
                       };
@@ -588,7 +573,7 @@ export default function CollectionDisplayConfig() {
                               )}
                               <BlockStack gap="050">
                                 <Text as="span" variant="bodyMd" fontWeight="bold">
-                                  {v.productTitle}
+                                  {v.variantTitle}
                                 </Text>
                                 <InlineStack gap="100">
                                   <Badge>{v.optionValue}</Badge>
@@ -628,8 +613,8 @@ export default function CollectionDisplayConfig() {
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">Preview</Text>
               <Text as="p" variant="bodySm" tone="subdued">
-                Customers will see each variant as a separate product card in
-                this collection.
+                Customers will see each variant as a separate card on home,
+                collections and search.
               </Text>
               <Box
                 background="bg-surface-secondary"
@@ -637,7 +622,7 @@ export default function CollectionDisplayConfig() {
                 borderRadius="200"
               >
                 <BlockStack gap="200">
-                  {allVariants.slice(0, 3).map((v) => (
+                  {variants.slice(0, 3).map((v) => (
                     <InlineStack key={v.variantId} gap="200" blockAlign="center">
                       {v.imageUrl ? (
                         <Thumbnail source={v.imageUrl} alt="" size="small" />
@@ -652,13 +637,13 @@ export default function CollectionDisplayConfig() {
                       <BlockStack gap="025">
                         <Text as="span" variant="bodySm" fontWeight="bold">
                           {titleFormat === "product_variant"
-                            ? `${v.productTitle} - ${v.optionValue}`
+                            ? `${product.title} - ${v.optionValue}`
                             : titleFormat === "variant_only"
                               ? v.optionValue
                               : titleFormat === "product_only"
-                                ? v.productTitle
+                                ? product.title
                                 : customTitleFormat
-                                    .replace("{product}", v.productTitle)
+                                    .replace("{product}", product.title)
                                     .replace("{variant}", v.optionValue)}
                         </Text>
                         <Text as="span" variant="bodySm" tone="subdued">
@@ -667,9 +652,9 @@ export default function CollectionDisplayConfig() {
                       </BlockStack>
                     </InlineStack>
                   ))}
-                  {allVariants.length > 3 && (
+                  {variants.length > 3 && (
                     <Text as="p" variant="bodySm" tone="subdued">
-                      +{allVariants.length - 3} more…
+                      +{variants.length - 3} more…
                     </Text>
                   )}
                 </BlockStack>

@@ -27,33 +27,33 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
-// Module B: Collection Display Configuration
-model CollectionConfig {
-  id              String   @id @default(cuid())
-  shop            String
-  collectionId    String
-  collectionTitle String   @default("")
-  enabled         Boolean  @default(true)
-  splitByOption   String   @default("Color")
-  hideOutOfStock  Boolean  @default(false)
-  showOnlyDiscount Boolean @default(false)
-  hideWithoutImage Boolean @default(false)
-  titleFormat     String   @default("product_variant") // product_only | variant_only | product_variant | custom
-  customTitleFormat String @default("{product} - {variant}")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  variants        VariantCollectionConfig[]
+// Module B: Product-level variant display configuration
+model ProductConfig {
+  id                String   @id @default(cuid())
+  shop              String
+  productId         String
+  productTitle      String   @default("")
+  productHandle     String   @default("")
+  enabled           Boolean  @default(true)
+  splitByOption     String   @default("Color")
+  hideOutOfStock    Boolean  @default(false)
+  showOnlyDiscount  Boolean  @default(false)
+  hideWithoutImage  Boolean  @default(false)
+  titleFormat       String   @default("product_variant") // product_only | variant_only | product_variant | custom
+  customTitleFormat String   @default("{product} - {variant}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  variants          ProductVariantConfig[]
 
-  @@unique([shop, collectionId])
+  @@unique([shop, productId])
 }
 
-// Per-variant display config within a collection
-model VariantCollectionConfig {
+// Per-variant display config within a product
+model ProductVariantConfig {
   id            String   @id @default(cuid())
   shop          String
-  collectionId  String
-  variantId     String
   productId     String
+  variantId     String
   variantTitle  String
   imageUrl      String   @default("")
   hoverImageUrl String   @default("")
@@ -61,7 +61,7 @@ model VariantCollectionConfig {
   position      Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  collection    CollectionConfig @relation(fields: [shop, collectionId], references: [shop, collectionId])
+  product       ProductConfig @relation(fields: [shop, productId], references: [shop, productId])
 
-  @@unique([shop, collectionId, variantId])
+  @@unique([shop, productId, variantId])
 }

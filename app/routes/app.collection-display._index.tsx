@@ -12,6 +12,7 @@ import {
   Badge,
   ResourceList,
   ResourceItem,
+  Thumbnail,
   EmptyState,
   Box,
 } from "@shopify/polaris";
@@ -19,12 +20,13 @@ import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
-interface CollectionNode {
+interface ProductNode {
   id: string;
   title: string;
   handle: string;
-  image: { url: string; altText: string | null } | null;
-  productsCount: { count: number };
+  status: string;
+  featuredImage: { url: string; altText: string | null } | null;
+  variantsCount: { count: number };
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -32,89 +34,110 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const response = await admin.graphql(`
     #graphql
-    query getCollections($first: Int!) {
-      collections(first: $first, sortKey: TITLE) {
+    query getProducts($first: Int!) {
+      products(first: $first, sortKey: TITLE) {
         edges {
           node {
             id
             title
             handle
-            image { url altText }
-            productsCount { count }
+            status
+            featuredImage { url altText }
+            variantsCount { count }
           }
         }
       }
     }
-  `, { variables: { first: 50 } });
+  `, { variables: { first: 100 } });
 
   const data = await response.json();
-  const collections: CollectionNode[] = data.data.collections.edges.map(
-    (e: { node: CollectionNode }) => e.node,
+  const products: ProductNode[] = data.data.products.edges.map(
+    (e: { node: ProductNode }) => e.node,
   );
 
-  // Get configured collections from DB
-  const configs = await db.collectionConfig.findMany({
+  // Get configured products from DB
+  const configs = await db.productConfig.findMany({
     where: { shop: session.shop },
-    select: { collectionId: true, enabled: true, splitByOption: true },
+    select: { productId: true, enabled: true, splitByOption: true },
   });
 
   const configMap = Object.fromEntries(
-    configs.map((c) => [c.collectionId, c]),
+    configs.map((c) => [c.productId, c]),
   );
 
-  return json({ collections, configMap });
+  return json({ products, configMap });
 };
 
 export default function CollectionDisplay() {
-  const { collections, configMap } = useLoaderData<typeof loader>();
+  const { products, configMap } = useLoaderData<typeof loader>();
+
+  // Only products with > 1 variant can be split into cards
+  const eligible = products.filter((p) => p.variantsCount.count > 1);
 
   return (
     <Page
       backAction={{ content: "Home", url: "/app" }}
       title="Collection Display"
-      subtitle="Configure how variants appear in each collection"
+      subtitle="Configure how each product's variants appear as separate cards"
     >
       <TitleBar title="Collection Display" />
       <Layout>
         <Layout.Section>
-          {collections.length === 0 ? (
+          {eligible.length === 0 ? (
             <Card>
               <EmptyState
-                heading="No collections found"
+                heading="No multi-variant products found"
                 image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
               >
                 <Text as="p" variant="bodyMd">
-                  Create collections in your Shopify admin and come back here
-                  to configure variant display for each one.
+                  This module shows variants as separate cards in your
+                  collections, homepage and search. Add variants to your
+                  products in Shopify first.
                 </Text>
               </EmptyState>
             </Card>
           ) : (
             <Card padding="0">
               <ResourceList
-                resourceName={{ singular: "collection", plural: "collections" }}
-                items={collections}
-                renderItem={(col) => {
-                  const numericId = col.id.replace(
-                    "gid://shopify/Collection/",
+                resourceName={{ singular: "product", plural: "products" }}
+                items={eligible}
+                renderItem={(product) => {
+                  const numericId = product.id.replace(
+                    "gid://shopify/Product/",
                     "",
                   );
-                  const config = configMap[col.id];
+                  const config = configMap[product.id];
                   const isConfigured = Boolean(config);
 
                   return (
                     <ResourceItem
-                      id={col.id}
+                      id={product.id}
                       url={`/app/collection-display/${numericId}`}
-                      accessibilityLabel={`Configure ${col.title}`}
+                      media={
+                        <Thumbnail
+                          source={product.featuredImage?.url ?? ""}
+                          alt={product.featuredImage?.altText ?? product.title}
+                          size="medium"
+                        />
+                      }
+                      accessibilityLabel={`Configure ${product.title}`}
                     >
                       <InlineStack align="space-between" blockAlign="center">
                         <BlockStack gap="100">
                           <Text as="h3" variant="bodyMd" fontWeight="bold">
-                            {col.title}
+                            {product.title}
                           </Text>
                           <InlineStack gap="200">
-                            <Badge>{`${col.productsCount.count} products`}</Badge>
+                            <Badge>{`${product.variantsCount.count} variants`}</Badge>
+                            <Badge
+                              tone={
+                                product.status === "ACTIVE"
+                                  ? "success"
+                                  : "attention"
+                              }
+                            >
+                              {product.status.toLowerCase()}
+                            </Badge>
                             {isConfigured ? (
                               <Badge tone={config.enabled ? "success" : "attention"}>
                                 {config.enabled
@@ -146,8 +169,8 @@ export default function CollectionDisplay() {
               </Text>
               <BlockStack gap="200">
                 <Text as="p" variant="bodyMd">
-                  <Text as="span" fontWeight="bold">1. Select a collection</Text>{" "}
-                  and enable variant display.
+                  <Text as="span" fontWeight="bold">1. Pick a product</Text>{" "}
+                  from the list and configure which variants to show as cards.
                 </Text>
                 <Text as="p" variant="bodyMd">
                   <Text as="span" fontWeight="bold">2. Choose the option</Text>{" "}
@@ -159,8 +182,8 @@ export default function CollectionDisplay() {
                 </Text>
                 <Text as="p" variant="bodyMd">
                   <Text as="span" fontWeight="bold">4. No duplicates.</Text>{" "}
-                  Variants appear as separate cards without creating new
-                  products in your catalog.
+                  Variants appear as separate cards in home, collections and
+                  search without creating new products in your catalog.
                 </Text>
               </BlockStack>
             </BlockStack>
@@ -173,8 +196,8 @@ export default function CollectionDisplay() {
                   Theme setup required
                 </Text>
                 <Text as="p" variant="bodySm" tone="subdued">
-                  To display variants in collections, enable the Variantis
-                  app embed in your theme editor.
+                  To display variants as separate cards, enable the Variantis
+                  Collections app embed in your theme editor.
                 </Text>
                 <Button
                   url="shopify:admin/themes/current/editor?context=apps"
