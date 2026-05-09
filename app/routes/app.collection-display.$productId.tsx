@@ -341,7 +341,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   };
 
   // Get shop GID
-  const shopRes = await admin.graphql(`#graphql query { shop { id } }`);
+  const shopRes = await admin.graphql(`
+    #graphql
+    query GetShopId { shop { id } }
+  `);
   const shopData = await shopRes.json();
   const shopGid = shopData.data.shop.id;
 
