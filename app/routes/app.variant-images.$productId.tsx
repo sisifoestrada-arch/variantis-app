@@ -162,6 +162,32 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     },
   });
 
+  // Sync each variant's featured image to the first image in its Variantis assignment.
+  // Shopify uses variant.image_id to determine the preview shown in collection listings.
+  const variantImageUpdates = Object.entries(body.assignment as Record<string, string[]>)
+    .filter(([, imageGids]) => imageGids.length > 0)
+    .map(([variantGid, imageGids]) => ({
+      id: variantGid,
+      imageId: imageGids[0],
+    }));
+
+  if (variantImageUpdates.length > 0) {
+    await admin.graphql(`
+      #graphql
+      mutation updateVariantPreviewImages($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id }
+          userErrors { field message }
+        }
+      }
+    `, {
+      variables: {
+        productId,
+        variants: variantImageUpdates,
+      },
+    });
+  }
+
   return json({ ok: true });
 };
 
